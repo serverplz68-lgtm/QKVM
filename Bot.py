@@ -3,7 +3,7 @@ from discord.ext import commands
 import asyncio
 import subprocess
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import shlex
 import logging
 import shutil
@@ -14,58 +14,24 @@ import time
 import sqlite3
 import random
 import requests
-import string
-import secrets
 from dotenv import load_dotenv
-
+from typing import Tuple
 # Load environment variables from .env file
 load_dotenv()
 
-# Load environment variables
+# Load environment variables - SECURITY: Never hardcode tokens!
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
+if not DISCORD_TOKEN:
+    raise ValueError("DISCORD_TOKEN environment variable is required! Set it in .env file or environment.")
+
 BOT_NAME = os.getenv('BOT_NAME', 'UnixNodes')
 PREFIX = os.getenv('PREFIX', '!')
 YOUR_SERVER_IP = os.getenv('YOUR_SERVER_IP', '127.0.0.1')
-MAIN_ADMIN_ID = int(os.getenv('MAIN_ADMIN_ID', '1210291131301101618'))
-VPS_USER_ROLE_ID = int(os.getenv('VPS_USER_ROLE_ID', '1210291131301101618'))
+MAIN_ADMIN_ID = int(os.getenv('MAIN_ADMIN_ID', '0'))
+VPS_USER_ROLE_ID = int(os.getenv('VPS_USER_ROLE_ID', '0'))
 DEFAULT_STORAGE_POOL = os.getenv('DEFAULT_STORAGE_POOL', 'default')
-HOST_MOTD = os.getenv('HOST_MOTD', 'bash <(curl -fsSL https://raw.githubusercontent.com/hopingboyz/linux/main/atyro-water-mark.sh)')
-BOT_VERSION = os.getenv('BOT_VERSION', '7.0-PRO')
+BOT_VERSION = os.getenv('BOT_VERSION', '8.0-PRO')
 BOT_DEVELOPER = os.getenv('BOT_DEVELOPER', 'Hopingboz')
-BOT_THUMBNAIL_URL = os.getenv('BOT_THUMBNAIL_URL', 'https://i.imgur.com/Tv3clt0.jpeg')
-BOT_ICON_URL = os.getenv('BOT_ICON_URL', 'https://i.imgur.com/Tv3clt0.jpeg')
-
-# VPS Expiration Settings
-DEFAULT_VPS_EXPIRATION_DAYS = int(os.getenv('DEFAULT_VPS_EXPIRATION_DAYS', '30'))
-EXPIRATION_WARNING_DAYS = int(os.getenv('EXPIRATION_WARNING_DAYS', '1'))
-
-# SSH Configuration
-SSH_FIX_SCRIPT = """#!/bin/bash
-cat > /etc/ssh/sshd_config << 'SSHEOF'
-Port 22
-AddressFamily any
-ListenAddress 0.0.0.0
-ListenAddress ::
-PasswordAuthentication yes
-PubkeyAuthentication yes
-PermitRootLogin yes
-PermitEmptyPasswords no
-ChallengeResponseAuthentication no
-UsePAM yes
-MaxAuthTries 6
-MaxSessions 10
-SyslogFacility AUTH
-LogLevel INFO
-X11Forwarding yes
-X11DisplayOffset 10
-PrintMotd no
-PrintLastLog yes
-TCPKeepAlive yes
-PermitUserEnvironment no
-Subsystem sftp /usr/lib/openssh/sftp-server
-SSHEOF
-systemctl restart ssh 2>/dev/null || service ssh restart 2>/dev/null || /etc/init.d/ssh restart 2>/dev/null || true
-"""
 
 # OS Options for VPS Creation and Reinstall
 OS_OPTIONS = [
@@ -90,20 +56,20 @@ logging.basicConfig(
 logger = logging.getLogger(f'{BOT_NAME.lower()}_vps_bot')
 
 # Database setup
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# If VPS_DB_PATH is set in .env, use that path (loads it if it exists, else creates it there).
-# Otherwise default to vps.db next to bot.py.
-DB_PATH = os.getenv('VPS_DB_PATH', os.path.join(BASE_DIR, 'vps.db'))
-DB_PATH = os.path.abspath(DB_PATH)
-os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-logger_db_msg = f"Using VPS DB at: {DB_PATH}" + (" (found existing)" if os.path.exists(DB_PATH) else " (creating new)")
-print(logger_db_msg)
-
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    """Get database connection with proper timeout and WAL mode"""
+    conn = sqlite3.connect('vps.db', timeout=60.0, check_same_thread=False, isolation_level=None)  # 60 second timeout, autocommit mode
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=60000")  # 60 second busy timeout
+    conn.execute("PRAGMA synchronous=NORMAL")  # Faster writes
     conn.row_factory = sqlite3.Row
     return conn
+
+# Async database wrapper to prevent blocking
+async def run_in_executor(func, *args):
+    """Run blocking database operations in thread executor"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, func, *args)
 
 def init_db():
     conn = get_db()
@@ -142,9 +108,7 @@ def init_db():
         whitelisted INTEGER DEFAULT 0,
         created_at TEXT NOT NULL,
         shared_with TEXT DEFAULT '[]',
-        suspension_history TEXT DEFAULT '[]',
-        expiration_date TEXT DEFAULT NULL,
-        root_password TEXT DEFAULT NULL
+        suspension_history TEXT DEFAULT '[]'
     )''')
     # Migrations
     cur.execute('PRAGMA table_info(vps)')
@@ -154,10 +118,6 @@ def init_db():
         cur.execute("ALTER TABLE vps ADD COLUMN os_version TEXT DEFAULT 'ubuntu:22.04'")
     if 'node_id' not in columns:
         cur.execute("ALTER TABLE vps ADD COLUMN node_id INTEGER DEFAULT 1")
-    if 'expiration_date' not in columns:
-        cur.execute("ALTER TABLE vps ADD COLUMN expiration_date TEXT DEFAULT NULL")
-    if 'root_password' not in columns:
-        cur.execute("ALTER TABLE vps ADD COLUMN root_password TEXT DEFAULT NULL")
     cur.execute('''CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -180,6 +140,424 @@ def init_db():
         host_port INTEGER NOT NULL,
         created_at TEXT NOT NULL
     )''')
+    
+    # ============================================
+    # COINS & ECONOMY SYSTEM TABLES
+    # ============================================
+    
+    # User coins balance and stats
+    cur.execute('''CREATE TABLE IF NOT EXISTS user_coins (
+        user_id TEXT PRIMARY KEY,
+        balance INTEGER DEFAULT 0,
+        total_earned INTEGER DEFAULT 0,
+        total_spent INTEGER DEFAULT 0,
+        last_daily TEXT,
+        invite_count INTEGER DEFAULT 0,
+        message_count INTEGER DEFAULT 0,
+        voice_minutes INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL
+    )''')
+    
+    # Coin transactions history
+    cur.execute('''CREATE TABLE IF NOT EXISTS coin_transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        amount INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        description TEXT,
+        created_at TEXT NOT NULL
+    )''')
+    
+    # VPS expiration and renewal system
+    cur.execute('''CREATE TABLE IF NOT EXISTS vps_expiration (
+        vps_id INTEGER PRIMARY KEY,
+        expires_at TEXT NOT NULL,
+        duration_days INTEGER NOT NULL,
+        auto_renew INTEGER DEFAULT 0,
+        renewal_notified INTEGER DEFAULT 0,
+        FOREIGN KEY (vps_id) REFERENCES vps(id)
+    )''')
+    
+    # Deployment plans (for user self-deployment)
+    cur.execute('''CREATE TABLE IF NOT EXISTS deploy_plans (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        description TEXT,
+        ram_gb INTEGER NOT NULL,
+        cpu_cores INTEGER NOT NULL,
+        disk_gb INTEGER NOT NULL,
+        duration_days INTEGER NOT NULL,
+        cost_coins INTEGER NOT NULL,
+        active INTEGER DEFAULT 1,
+        icon TEXT DEFAULT 'ð¦',
+        created_at TEXT NOT NULL
+    )''')
+    
+    # Resource upgrade plans
+    cur.execute('''CREATE TABLE IF NOT EXISTS resource_plans (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        description TEXT,
+        ram_gb INTEGER NOT NULL,
+        cpu_cores INTEGER NOT NULL,
+        disk_gb INTEGER NOT NULL,
+        upgrade_cost INTEGER NOT NULL,
+        active INTEGER DEFAULT 1,
+        icon TEXT DEFAULT 'â¡',
+        created_at TEXT NOT NULL
+    )''')
+    
+    # VPS upgrade history
+    cur.execute('''CREATE TABLE IF NOT EXISTS vps_upgrades (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        vps_id INTEGER NOT NULL,
+        user_id TEXT NOT NULL,
+        old_ram INTEGER,
+        old_cpu INTEGER,
+        old_disk INTEGER,
+        new_ram INTEGER,
+        new_cpu INTEGER,
+        new_disk INTEGER,
+        cost_coins INTEGER,
+        upgraded_at TEXT NOT NULL,
+        upgraded_by TEXT,
+        FOREIGN KEY (vps_id) REFERENCES vps(id)
+    )''')
+    
+    # Invite tracking
+    cur.execute('''CREATE TABLE IF NOT EXISTS invites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        inviter_id TEXT NOT NULL,
+        invited_id TEXT NOT NULL,
+        joined_at TEXT NOT NULL,
+        coins_earned INTEGER DEFAULT 0
+    )''')
+    
+    # Voice activity tracking
+    cur.execute('''CREATE TABLE IF NOT EXISTS voice_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        duration_minutes INTEGER DEFAULT 0,
+        coins_earned INTEGER DEFAULT 0
+    )''')
+    
+    # Coupon codes system
+    cur.execute('''CREATE TABLE IF NOT EXISTS coupon_codes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT UNIQUE NOT NULL,
+        coins INTEGER NOT NULL,
+        max_uses INTEGER DEFAULT NULL,
+        current_uses INTEGER DEFAULT 0,
+        expires_at TEXT DEFAULT NULL,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        active INTEGER DEFAULT 1,
+        description TEXT
+    )''')
+    
+    # Coupon redemptions tracking
+    cur.execute('''CREATE TABLE IF NOT EXISTS coupon_redemptions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        coupon_id INTEGER NOT NULL,
+        user_id TEXT NOT NULL,
+        coins_received INTEGER NOT NULL,
+        redeemed_at TEXT NOT NULL,
+        FOREIGN KEY (coupon_id) REFERENCES coupon_codes(id)
+    )''')
+    
+    # Security: Rate limiting tracking
+    cur.execute('''CREATE TABLE IF NOT EXISTS rate_limits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        action_type TEXT NOT NULL,
+        action_count INTEGER DEFAULT 1,
+        window_start TEXT NOT NULL,
+        last_action TEXT NOT NULL,
+        UNIQUE(user_id, action_type)
+    )''')
+    
+    # Security: Suspicious activity log
+    cur.execute('''CREATE TABLE IF NOT EXISTS security_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        activity_type TEXT NOT NULL,
+        description TEXT,
+        severity TEXT DEFAULT 'low',
+        flagged INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        additional_data TEXT
+    )''')
+    
+    # Security: User trust score
+    cur.execute('''CREATE TABLE IF NOT EXISTS user_trust (
+        user_id TEXT PRIMARY KEY,
+        trust_score INTEGER DEFAULT 100,
+        warnings INTEGER DEFAULT 0,
+        violations INTEGER DEFAULT 0,
+        last_violation TEXT,
+        restricted INTEGER DEFAULT 0,
+        notes TEXT
+    )''')
+    
+    # Initialize default deployment plans (only if table is empty - first run)
+    cur.execute('SELECT COUNT(*) as count FROM deploy_plans')
+    if cur.fetchone()['count'] == 0:
+        default_deploy_plans = [
+            ('Starter', 'Perfect for testing and learning', 1, 1, 10, 1, 1000, 'ð±'),
+            ('Basic', 'Good for small projects', 2, 1, 10, 1, 2000, 'ð¦'),
+            ('Standard', 'Balanced resources for most uses', 2, 2, 20, 7, 3000, 'âï¸'),
+            ('Pro', 'More power for demanding apps', 4, 2, 40, 7, 5000, 'ð'),
+            ('Premium', 'Maximum performance', 8, 4, 80, 30, 10000, 'ð'),
+        ]
+        
+        for name, desc, ram, cpu, disk, days, cost, icon in default_deploy_plans:
+            cur.execute('''INSERT INTO deploy_plans 
+                           (name, description, ram_gb, cpu_cores, disk_gb, duration_days, cost_coins, icon, created_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                       (name, desc, ram, cpu, disk, days, cost, icon, datetime.now().isoformat()))
+    
+    # Initialize default resource plans (only if table is empty - first run)
+    cur.execute('SELECT COUNT(*) as count FROM resource_plans')
+    if cur.fetchone()['count'] == 0:
+        default_resource_plans = [
+            ('Micro', 'Minimal resources', 1, 1, 10, 500, 'ð¹'),
+            ('Small', 'Light workloads', 2, 1, 20, 1000, 'ð¸'),
+            ('Medium', 'Balanced performance', 4, 2, 40, 2000, 'â¡'),
+            ('Large', 'Heavy workloads', 8, 4, 80, 4000, 'ð¥'),
+            ('XLarge', 'Maximum power', 16, 8, 160, 8000, 'ð«'),
+        ]
+        
+        for name, desc, ram, cpu, disk, cost, icon in default_resource_plans:
+            cur.execute('''INSERT INTO resource_plans 
+                           (name, description, ram_gb, cpu_cores, disk_gb, upgrade_cost, icon, created_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                       (name, desc, ram, cpu, disk, cost, icon, datetime.now().isoformat()))
+    
+    # Coin economy settings
+    coin_settings = [
+        ('coins_per_invite', '50'),
+        ('coins_per_message', '1'),
+        ('coins_per_voice_minute', '2'),
+        ('coins_daily_reward', '100'),
+        ('coins_vps_renewal_1day', '50'),
+        ('coins_vps_renewal_7days', '300'),
+        ('coins_vps_renewal_30days', '1000'),
+        ('default_vps_duration_days', '7'),
+        ('vps_expiry_warning_hours', '24'),
+        ('message_cooldown_seconds', '60'),
+        ('voice_min_duration_minutes', '5'),
+        ('leaderboard_top_count', '10'),
+        ('coins_bonus_multiplier', '1.0'),
+        ('streak_bonus_multiplier', '0.1'),
+        ('max_streak_bonus', '2.0'),
+        ('quest_refresh_hours', '24'),
+        ('shop_booster_2x_1hour', '200'),
+        ('shop_booster_2x_24hour', '1500'),
+        ('shop_username_color', '1000'),
+        ('shop_custom_role', '2000'),
+    ]
+    for key, value in coin_settings:
+        cur.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', (key, value))
+    
+    # ============================================
+    # ADVANCED COINS FEATURES TABLES
+    # ============================================
+    
+    # Achievements system
+    cur.execute('''CREATE TABLE IF NOT EXISTS achievements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        description TEXT NOT NULL,
+        requirement_type TEXT NOT NULL,
+        requirement_value INTEGER NOT NULL,
+        reward_coins INTEGER NOT NULL,
+        icon TEXT DEFAULT 'ð',
+        category TEXT DEFAULT 'general'
+    )''')
+    
+    # User achievements
+    cur.execute('''CREATE TABLE IF NOT EXISTS user_achievements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        achievement_id INTEGER NOT NULL,
+        unlocked_at TEXT NOT NULL,
+        FOREIGN KEY (achievement_id) REFERENCES achievements(id)
+    )''')
+    
+    # Daily streaks
+    cur.execute('''CREATE TABLE IF NOT EXISTS user_streaks (
+        user_id TEXT PRIMARY KEY,
+        current_streak INTEGER DEFAULT 0,
+        longest_streak INTEGER DEFAULT 0,
+        last_claim_date TEXT,
+        streak_bonus_multiplier REAL DEFAULT 1.0
+    )''')
+    
+    # Daily/Weekly quests
+    cur.execute('''CREATE TABLE IF NOT EXISTS quests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        quest_type TEXT NOT NULL,
+        requirement_type TEXT NOT NULL,
+        requirement_value INTEGER NOT NULL,
+        reward_coins INTEGER NOT NULL,
+        duration TEXT DEFAULT 'daily',
+        active INTEGER DEFAULT 1
+    )''')
+    
+    # User quest progress
+    cur.execute('''CREATE TABLE IF NOT EXISTS user_quests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        quest_id INTEGER NOT NULL,
+        progress INTEGER DEFAULT 0,
+        completed INTEGER DEFAULT 0,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        FOREIGN KEY (quest_id) REFERENCES quests(id)
+    )''')
+    
+    # Coin shop items
+    cur.execute('''CREATE TABLE IF NOT EXISTS shop_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        description TEXT NOT NULL,
+        price INTEGER NOT NULL,
+        item_type TEXT NOT NULL,
+        item_data TEXT,
+        stock INTEGER DEFAULT -1,
+        purchasable INTEGER DEFAULT 1,
+        icon TEXT DEFAULT 'ð'
+    )''')
+    
+    # User purchases
+    cur.execute('''CREATE TABLE IF NOT EXISTS user_purchases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        item_id INTEGER NOT NULL,
+        purchased_at TEXT NOT NULL,
+        expires_at TEXT,
+        active INTEGER DEFAULT 1,
+        FOREIGN KEY (item_id) REFERENCES shop_items(id)
+    )''')
+    
+    # Boosters (multipliers)
+    cur.execute('''CREATE TABLE IF NOT EXISTS active_boosters (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        booster_type TEXT NOT NULL,
+        multiplier REAL NOT NULL,
+        activated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        active INTEGER DEFAULT 1
+    )''')
+    
+    # Coin gifting/trading
+    cur.execute('''CREATE TABLE IF NOT EXISTS coin_gifts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id TEXT NOT NULL,
+        receiver_id TEXT NOT NULL,
+        amount INTEGER NOT NULL,
+        message TEXT,
+        sent_at TEXT NOT NULL
+    )''')
+    
+    # Referral system
+    cur.execute('''CREATE TABLE IF NOT EXISTS referrals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        referrer_id TEXT NOT NULL,
+        referred_id TEXT NOT NULL,
+        referral_code TEXT,
+        bonus_earned INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL
+    )''')
+    
+    # Coin lottery/gambling
+    cur.execute('''CREATE TABLE IF NOT EXISTS lottery_tickets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        ticket_number INTEGER NOT NULL,
+        draw_id INTEGER NOT NULL,
+        purchased_at TEXT NOT NULL,
+        won INTEGER DEFAULT 0
+    )''')
+    
+    # Work/Jobs system
+    cur.execute('''CREATE TABLE IF NOT EXISTS user_jobs (
+        user_id TEXT PRIMARY KEY,
+        current_job TEXT,
+        job_level INTEGER DEFAULT 1,
+        job_experience INTEGER DEFAULT 0,
+        last_work_time TEXT,
+        total_work_count INTEGER DEFAULT 0
+    )''')
+    
+    # Initialize default achievements
+    default_achievements = [
+        ('First Steps', 'Earn your first coin', 'coins_earned', 1, 50, 'ð¯', 'beginner'),
+        ('Chatterbox', 'Send 100 messages', 'messages', 100, 100, 'ð¬', 'social'),
+        ('Voice Master', 'Spend 60 minutes in voice', 'voice_minutes', 60, 150, 'ð¤', 'social'),
+        ('Inviter', 'Invite 5 members', 'invites', 5, 200, 'ð¥', 'social'),
+        ('Rich', 'Accumulate 1000 coins', 'balance', 1000, 500, 'ð°', 'wealth'),
+        ('Millionaire', 'Accumulate 10000 coins', 'balance', 10000, 2000, 'ð', 'wealth'),
+        ('Dedicated', 'Maintain a 7-day streak', 'streak', 7, 300, 'ð¥', 'dedication'),
+        ('Loyal', 'Maintain a 30-day streak', 'streak', 30, 1000, 'â­', 'dedication'),
+        ('VPS Owner', 'Own a VPS', 'vps_count', 1, 100, 'ð¥ï¸', 'vps'),
+        ('Quest Master', 'Complete 10 quests', 'quests_completed', 10, 400, 'ð', 'quests'),
+        ('Generous', 'Gift 500 coins to others', 'coins_gifted', 500, 250, 'ð', 'social'),
+        ('Worker', 'Work 50 times', 'work_count', 50, 350, 'âï¸', 'work'),
+    ]
+    
+    for name, desc, req_type, req_val, reward, icon, category in default_achievements:
+        cur.execute('''INSERT OR IGNORE INTO achievements 
+                       (name, description, requirement_type, requirement_value, reward_coins, icon, category)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                   (name, desc, req_type, req_val, reward, icon, category))
+    
+    # Initialize default quests
+    default_quests = [
+        ('Daily Chatter', 'Send 20 messages today', 'daily', 'messages', 20, 50),
+        ('Voice Time', 'Spend 30 minutes in voice today', 'daily', 'voice_minutes', 30, 75),
+        ('Social Butterfly', 'Invite 1 member today', 'daily', 'invites', 1, 100),
+        ('Weekly Grind', 'Send 100 messages this week', 'weekly', 'messages', 100, 200),
+        ('Voice Champion', 'Spend 3 hours in voice this week', 'weekly', 'voice_minutes', 180, 300),
+    ]
+    
+    for name, desc, duration, req_type, req_val, reward in default_quests:
+        cur.execute('''INSERT OR IGNORE INTO quests 
+                       (name, description, quest_type, requirement_type, requirement_value, reward_coins, duration)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                   (name, desc, duration, req_type, req_val, reward, duration))
+    
+    # Initialize shop items
+    default_shop_items = [
+        ('2x Coin Booster (1 Hour)', 'Double coin earnings for 1 hour', 200, 'booster', '{"multiplier":2.0,"duration":3600}', -1, 'â¡'),
+        ('2x Coin Booster (24 Hours)', 'Double coin earnings for 24 hours', 1500, 'booster', '{"multiplier":2.0,"duration":86400}', -1, 'ð'),
+        ('3x Coin Booster (1 Hour)', 'Triple coin earnings for 1 hour', 500, 'booster', '{"multiplier":3.0,"duration":3600}', -1, 'ð«'),
+        ('Custom Username Color', 'Get a custom colored username', 1000, 'cosmetic', '{"type":"color"}', -1, 'ð¨'),
+        ('Custom Role', 'Get a custom role with your name', 2000, 'cosmetic', '{"type":"role"}', -1, 'ð'),
+        ('Lottery Ticket', 'Enter the weekly lottery draw', 50, 'lottery', '{"type":"ticket"}', -1, 'ï¿½'),
+    ]
+    
+    for name, desc, price, item_type, item_data, stock, icon in default_shop_items:
+        cur.execute('''INSERT OR IGNORE INTO shop_items 
+                       (name, description, price, item_type, item_data, stock, icon)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                   (name, desc, price, item_type, item_data, stock, icon))
+    
+    # Add expiration columns to VPS table if not exists
+    cur.execute('PRAGMA table_info(vps)')
+    vps_columns = [col[1] for col in cur.fetchall()]
+    if 'expires_at' not in vps_columns:
+        cur.execute("ALTER TABLE vps ADD COLUMN expires_at TEXT")
+    if 'duration_days' not in vps_columns:
+        cur.execute("ALTER TABLE vps ADD COLUMN duration_days INTEGER DEFAULT 7")
+    if 'auto_renew' not in vps_columns:
+        cur.execute("ALTER TABLE vps ADD COLUMN auto_renew INTEGER DEFAULT 0")
+    
     conn.commit()
     conn.close()
 
@@ -207,8 +585,6 @@ def get_nodes() -> List[Dict]:
     nodes = [dict(row) for row in rows]
     for node in nodes:
         node['tags'] = json.loads(node['tags'])
-        # Ensure is_local is properly converted
-        node['is_local'] = int(node.get('is_local', 1)) == 1
     return nodes
 
 def get_node(node_id: int) -> Optional[Dict]:
@@ -220,26 +596,7 @@ def get_node(node_id: int) -> Optional[Dict]:
     if row:
         node = dict(row)
         node['tags'] = json.loads(node['tags'])
-        # Ensure is_local is properly converted
-        node['is_local'] = int(node.get('is_local', 1)) == 1
         return node
-    return None
-
-def get_vps_by_id(vps_id: int) -> Optional[Dict]:
-    """Get VPS info by global VPS ID"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute('SELECT * FROM vps WHERE id = ?', (vps_id,))
-    row = cur.fetchone()
-    conn.close()
-    if row:
-        vps = dict(row)
-        vps['shared_with'] = json.loads(vps.get('shared_with', '[]'))
-        vps['suspension_history'] = json.loads(vps.get('suspension_history', '[]'))
-        vps['suspended'] = bool(vps.get('suspended', 0))
-        vps['whitelisted'] = bool(vps.get('whitelisted', 0))
-        vps['os_version'] = vps.get('os_version', 'ubuntu:22.04')
-        return vps
     return None
 
 def get_current_vps_count(node_id: int) -> int:
@@ -249,6 +606,230 @@ def get_current_vps_count(node_id: int) -> int:
     count = cur.fetchone()[0]
     conn.close()
     return count
+
+# ============================================
+# DEPLOYMENT & RESOURCE PLANS FUNCTIONS
+# ============================================
+
+def get_deploy_plans(active_only: bool = True) -> List[Dict]:
+    """Get all deployment plans"""
+    conn = get_db()
+    cur = conn.cursor()
+    if active_only:
+        cur.execute('SELECT * FROM deploy_plans WHERE active = 1 ORDER BY cost_coins')
+    else:
+        cur.execute('SELECT * FROM deploy_plans ORDER BY cost_coins')
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+def get_deploy_plan(plan_id: int) -> Dict:
+    """Get a specific deployment plan"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('SELECT * FROM deploy_plans WHERE id = ?', (plan_id,))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def get_resource_plans(active_only: bool = True) -> List[Dict]:
+    """Get all resource upgrade plans"""
+    conn = get_db()
+    cur = conn.cursor()
+    if active_only:
+        cur.execute('SELECT * FROM resource_plans WHERE active = 1 ORDER BY upgrade_cost')
+    else:
+        cur.execute('SELECT * FROM resource_plans ORDER BY upgrade_cost')
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+def get_resource_plan(plan_id: int) -> Dict:
+    """Get a specific resource plan"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('SELECT * FROM resource_plans WHERE id = ?', (plan_id,))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def log_vps_upgrade(vps_id: int, user_id: str, old_specs: Dict, new_specs: Dict, cost: int, upgraded_by: str = None):
+    """Log VPS upgrade to history"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('''INSERT INTO vps_upgrades 
+                   (vps_id, user_id, old_ram, old_cpu, old_disk, new_ram, new_cpu, new_disk, cost_coins, upgraded_at, upgraded_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+               (vps_id, user_id, old_specs.get('ram'), old_specs.get('cpu'), old_specs.get('disk'),
+                new_specs.get('ram'), new_specs.get('cpu'), new_specs.get('disk'),
+                cost, datetime.now().isoformat(), upgraded_by or user_id))
+    conn.commit()
+    conn.close()
+
+def get_coupon(code: str) -> Optional[Dict]:
+    """Get coupon by code"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('SELECT * FROM coupon_codes WHERE code = ? COLLATE NOCASE', (code,))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def get_all_coupons(active_only: bool = False) -> List[Dict]:
+    """Get all coupons"""
+    conn = get_db()
+    cur = conn.cursor()
+    if active_only:
+        cur.execute('SELECT * FROM coupon_codes WHERE active = 1 ORDER BY created_at DESC')
+    else:
+        cur.execute('SELECT * FROM coupon_codes ORDER BY created_at DESC')
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+def create_coupon(code: str, coins: int, max_uses: int = None, expires_at: str = None, 
+                  created_by: str = None, description: str = None) -> int:
+    """Create a new coupon code"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('''INSERT INTO coupon_codes 
+                   (code, coins, max_uses, expires_at, created_by, created_at, description)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+               (code.upper(), coins, max_uses, expires_at, created_by, 
+                datetime.now().isoformat(), description))
+    coupon_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return coupon_id
+
+def redeem_coupon(code: str, user_id: str):
+    """Redeem a coupon code - Returns (success, message, coins)"""
+    conn = None
+    try:
+        conn = get_db()
+        conn.execute('PRAGMA busy_timeout = 5000')  # 5 second timeout
+        cur = conn.cursor()
+        
+        # Get coupon
+        cur.execute('SELECT * FROM coupon_codes WHERE code = ? COLLATE NOCASE', (code,))
+        coupon = cur.fetchone()
+        
+        if not coupon:
+            return False, "Invalid coupon code", 0
+        
+        coupon = dict(coupon)
+        
+        # Check if active
+        if not coupon['active']:
+            return False, "This coupon has been disabled", 0
+        
+        # Check expiry
+        if coupon['expires_at']:
+            expiry = datetime.fromisoformat(coupon['expires_at'])
+            if datetime.now() > expiry:
+                return False, "This coupon has expired", 0
+        
+        # Check max uses
+        if coupon['max_uses'] is not None:
+            if coupon['current_uses'] >= coupon['max_uses']:
+                return False, "This coupon has reached its usage limit", 0
+        
+        # Check if user already redeemed
+        cur.execute('SELECT * FROM coupon_redemptions WHERE coupon_id = ? AND user_id = ?',
+                   (coupon['id'], user_id))
+        if cur.fetchone():
+            return False, "You have already redeemed this coupon", 0
+        
+        # Redeem coupon
+        coins = coupon['coins']
+        
+        # Ensure user exists in user_coins table
+        cur.execute('''INSERT OR IGNORE INTO user_coins (user_id, balance, total_earned, total_spent, created_at)
+                       VALUES (?, 0, 0, 0, ?)''', (user_id, datetime.now().isoformat()))
+        
+        # Update user's balance and total_earned
+        cur.execute('''UPDATE user_coins 
+                       SET balance = balance + ?, total_earned = total_earned + ?
+                       WHERE user_id = ?''', (coins, coins, user_id))
+        
+        # Log transaction
+        cur.execute('''INSERT INTO coin_transactions 
+                       (user_id, amount, type, description, created_at)
+                       VALUES (?, ?, ?, ?, ?)''',
+                   (user_id, coins, 'coupon_redeem', f'Redeemed coupon: {code}', 
+                    datetime.now().isoformat()))
+        
+        # Log redemption
+        cur.execute('''INSERT INTO coupon_redemptions 
+                       (coupon_id, user_id, coins_received, redeemed_at)
+                       VALUES (?, ?, ?, ?)''',
+                   (coupon['id'], user_id, coins, datetime.now().isoformat()))
+        
+        # Update coupon usage count
+        cur.execute('UPDATE coupon_codes SET current_uses = current_uses + 1 WHERE id = ?',
+                   (coupon['id'],))
+        
+        conn.commit()
+        
+        return True, "Coupon redeemed successfully", coins
+        
+    except Exception as e:
+        logger.error(f"Error redeeming coupon {code}: {e}")
+        if conn:
+            conn.rollback()
+        return False, f"An error occurred: {str(e)}", 0
+    finally:
+        if conn:
+            conn.close()
+
+def get_coupon_stats(coupon_id: int) -> Dict:
+    """Get coupon usage statistics"""
+    conn = get_db()
+    cur = conn.cursor()
+    
+    # Get coupon info
+    cur.execute('SELECT * FROM coupon_codes WHERE id = ?', (coupon_id,))
+    coupon = cur.fetchone()
+    if not coupon:
+        conn.close()
+        return None
+    
+    coupon = dict(coupon)
+    
+    # Get redemption count
+    cur.execute('SELECT COUNT(*) as count FROM coupon_redemptions WHERE coupon_id = ?', (coupon_id,))
+    redemptions = cur.fetchone()['count']
+    
+    # Get total coins distributed
+    cur.execute('SELECT SUM(coins_received) as total FROM coupon_redemptions WHERE coupon_id = ?', (coupon_id,))
+    total_coins = cur.fetchone()['total'] or 0
+    
+    # Get recent redemptions
+    cur.execute('''SELECT user_id, coins_received, redeemed_at 
+                   FROM coupon_redemptions 
+                   WHERE coupon_id = ? 
+                   ORDER BY redeemed_at DESC LIMIT 10''', (coupon_id,))
+    recent = [dict(row) for row in cur.fetchall()]
+    
+    conn.close()
+    
+    return {
+        'coupon': coupon,
+        'redemptions': redemptions,
+        'total_coins': total_coins,
+        'recent': recent
+    }
+
+def get_vps_data() -> Dict[str, List[Dict[str, Any]]]:
+    cur = conn.cursor()
+    cur.execute('''INSERT INTO vps_upgrades 
+                   (vps_id, user_id, old_ram, old_cpu, old_disk, new_ram, new_cpu, new_disk, cost_coins, upgraded_at, upgraded_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+               (vps_id, user_id, old_specs['ram'], old_specs['cpu'], old_specs['disk'],
+                new_specs['ram'], new_specs['cpu'], new_specs['disk'], cost,
+                datetime.now().isoformat(), upgraded_by))
+    conn.commit()
+    conn.close()
 
 def get_vps_data() -> Dict[str, List[Dict[str, Any]]]:
     conn = get_db()
@@ -290,20 +871,18 @@ def save_vps_data():
             os_ver = vps.get('os_version', 'ubuntu:22.04')
             created_at = vps.get('created_at', datetime.now().isoformat())
             node_id = vps.get('node_id', 1)
-            expiration_date = vps.get('expiration_date', None)
-            root_password = vps.get('root_password', None)
             if 'id' not in vps or vps['id'] is None:
-                cur.execute('''INSERT INTO vps (user_id, node_id, container_name, ram, cpu, storage, config, os_version, status, suspended, whitelisted, created_at, shared_with, suspension_history, expiration_date, root_password)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                cur.execute('''INSERT INTO vps (user_id, node_id, container_name, ram, cpu, storage, config, os_version, status, suspended, whitelisted, created_at, shared_with, suspension_history)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                             (user_id, node_id, vps['container_name'], vps['ram'], vps['cpu'], vps['storage'], vps['config'],
                              os_ver, vps['status'], suspended_int, whitelisted_int,
-                             created_at, shared_json, history_json, expiration_date, root_password))
+                             created_at, shared_json, history_json))
                 vps['id'] = cur.lastrowid
             else:
-                cur.execute('''UPDATE vps SET user_id = ?, node_id = ?, container_name = ?, ram = ?, cpu = ?, storage = ?, config = ?, os_version = ?, status = ?, suspended = ?, whitelisted = ?, shared_with = ?, suspension_history = ?, expiration_date = ?, root_password = ?
+                cur.execute('''UPDATE vps SET user_id = ?, node_id = ?, container_name = ?, ram = ?, cpu = ?, storage = ?, config = ?, os_version = ?, status = ?, suspended = ?, whitelisted = ?, shared_with = ?, suspension_history = ?
                                WHERE id = ?''',
                             (user_id, node_id, vps['container_name'], vps['ram'], vps['cpu'], vps['storage'], vps['config'],
-                             os_ver, vps['status'], suspended_int, whitelisted_int, shared_json, history_json, expiration_date, root_password, vps['id']))
+                             os_ver, vps['status'], suspended_int, whitelisted_int, shared_json, history_json, vps['id']))
     conn.commit()
     conn.close()
 
@@ -377,7 +956,8 @@ async def create_port_forward(user_id: str, container: str, vps_port: int, node_
         logger.error(f"Failed to create port forward: {e}")
         return None
 
-async def remove_port_forward(forward_id: int, is_admin: bool = False) -> tuple[bool, Optional[str]]:
+async def remove_port_forward(forward_id: int, is_admin: bool = False):
+    """Remove a port forward - Returns (success, error_message)"""
     conn = get_db()
     cur = conn.cursor()
     cur.execute('SELECT user_id, vps_container, host_port FROM port_forwards WHERE id = ?', (forward_id,))
@@ -435,6 +1015,740 @@ def find_node_id_for_container(container_name: str) -> int:
     conn.close()
     return row[0] if row else 1  # Default to local
 
+# ============================================
+# COINS & ECONOMY SYSTEM FUNCTIONS
+# ============================================
+
+def get_user_coins(user_id: str) -> Dict:
+    """Get user's coin balance and stats"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('SELECT * FROM user_coins WHERE user_id = ?', (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    
+    if row:
+        return dict(row)
+    else:
+        # Create new user
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute('''INSERT INTO user_coins (user_id, balance, total_earned, total_spent, created_at)
+                       VALUES (?, 0, 0, 0, ?)''', (user_id, datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+        return {
+            'user_id': user_id,
+            'balance': 0,
+            'total_earned': 0,
+            'total_spent': 0,
+            'invite_count': 0,
+            'message_count': 0,
+            'voice_minutes': 0
+        }
+
+def add_coins(user_id: str, amount: int, transaction_type: str, description: str = None) -> int:
+    """Add coins to user's balance and log transaction"""
+    
+    # NOTE: Booster multiplier disabled to prevent database locks
+    # Boosters can be applied manually before calling this function if needed
+    
+    conn = get_db()
+    cur = conn.cursor()
+    
+    # Ensure user exists (INSERT OR IGNORE)
+    cur.execute('''INSERT OR IGNORE INTO user_coins (user_id, balance, total_earned, total_spent, created_at)
+                   VALUES (?, 0, 0, 0, ?)''', (user_id, datetime.now().isoformat()))
+    
+    # Update balance
+    cur.execute('''UPDATE user_coins 
+                   SET balance = balance + ?, total_earned = total_earned + ?
+                   WHERE user_id = ?''', (amount, amount, user_id))
+    
+    # Log transaction
+    cur.execute('''INSERT INTO coin_transactions (user_id, amount, type, description, created_at)
+                   VALUES (?, ?, ?, ?, ?)''',
+                (user_id, amount, transaction_type, description, datetime.now().isoformat()))
+    
+    # Get new balance
+    cur.execute('SELECT balance FROM user_coins WHERE user_id = ?', (user_id,))
+    new_balance = cur.fetchone()[0]
+    conn.close()
+    
+    return new_balance
+
+def remove_coins(user_id: str, amount: int, transaction_type: str, description: str = None):
+    """Remove coins from user's balance. Returns (success, new_balance)"""
+    conn = get_db()
+    cur = conn.cursor()
+    
+    # Check balance
+    cur.execute('SELECT balance FROM user_coins WHERE user_id = ?', (user_id,))
+    row = cur.fetchone()
+    
+    if not row or row[0] < amount:
+        conn.close()
+        return False, row[0] if row else 0
+    
+    # Update balance
+    cur.execute('''UPDATE user_coins 
+                   SET balance = balance - ?, total_spent = total_spent + ?
+                   WHERE user_id = ?''', (amount, amount, user_id))
+    
+    # Log transaction
+    cur.execute('''INSERT INTO coin_transactions (user_id, amount, type, description, created_at)
+                   VALUES (?, ?, ?, ?, ?)''',
+                (user_id, -amount, transaction_type, description, datetime.now().isoformat()))
+    
+    conn.commit()
+    
+    # Get new balance
+    cur.execute('SELECT balance FROM user_coins WHERE user_id = ?', (user_id,))
+    new_balance = cur.fetchone()[0]
+    conn.close()
+    
+    return True, new_balance
+
+def get_coin_leaderboard(limit: int = 10) -> List[Dict]:
+    """Get top users by coin balance"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('''SELECT user_id, balance, total_earned, invite_count, message_count, voice_minutes
+                   FROM user_coins 
+                   ORDER BY balance DESC 
+                   LIMIT ?''', (limit,))
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+def get_user_transactions(user_id: str, limit: int = 10) -> List[Dict]:
+    """Get user's recent transactions"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('''SELECT * FROM coin_transactions 
+                   WHERE user_id = ? 
+                   ORDER BY created_at DESC 
+                   LIMIT ?''', (user_id, limit))
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+def set_vps_expiration(vps_id: int, duration_days: int):
+    """Set VPS expiration date"""
+    expires_at = datetime.now() + timedelta(days=duration_days)
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('''UPDATE vps 
+                   SET expires_at = ?, duration_days = ?
+                   WHERE id = ?''', (expires_at.isoformat(), duration_days, vps_id))
+    conn.commit()
+    conn.close()
+
+def get_expiring_vps(hours_before: int = 24) -> List[Dict]:
+    """Get VPS that will expire soon"""
+    warning_time = datetime.now() + timedelta(hours=hours_before)
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('''SELECT * FROM vps 
+                   WHERE expires_at IS NOT NULL 
+                   AND expires_at <= ? 
+                   AND suspended = 0
+                   AND whitelisted = 0
+                   ORDER BY expires_at ASC''', (warning_time.isoformat(),))
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+def renew_vps(vps_id: int, duration_days: int) -> bool:
+    """Renew VPS for additional days"""
+    conn = get_db()
+    cur = conn.cursor()
+    
+    # Get current expiration
+    cur.execute('SELECT expires_at FROM vps WHERE id = ?', (vps_id,))
+    row = cur.fetchone()
+    
+    if not row:
+        conn.close()
+        return False
+    
+    current_expiry = row[0]
+    
+    # Calculate new expiration
+    if current_expiry:
+        base_time = datetime.fromisoformat(current_expiry)
+        if base_time < datetime.now():
+            base_time = datetime.now()
+    else:
+        base_time = datetime.now()
+    
+    new_expiry = base_time + timedelta(days=duration_days)
+    
+    # Update VPS
+    cur.execute('''UPDATE vps 
+                   SET expires_at = ?, duration_days = duration_days + ?
+                   WHERE id = ?''', (new_expiry.isoformat(), duration_days, vps_id))
+    
+    conn.commit()
+    conn.close()
+    return True
+
+def check_and_suspend_expired_vps():
+    """Check for expired VPS and suspend them"""
+    conn = get_db()
+    cur = conn.cursor()
+    
+    # Find expired VPS
+    cur.execute('''SELECT id, user_id, container_name, expires_at 
+                   FROM vps 
+                   WHERE expires_at IS NOT NULL 
+                   AND expires_at <= ? 
+                   AND suspended = 0
+                   AND whitelisted = 0
+                   AND status = 'running' ''', (datetime.now().isoformat(),))
+    
+    expired_vps = cur.fetchall()
+    conn.close()
+    
+    suspended_count = 0
+    for vps in expired_vps:
+        vps_id, user_id, container_name, expires_at = vps
+        node_id = find_node_id_for_container(container_name)
+        
+        try:
+            # Stop the VPS
+            asyncio.create_task(execute_lxc(container_name, f"stop {container_name}", node_id=node_id))
+            
+            # Mark as suspended
+            conn = get_db()
+            cur = conn.cursor()
+            cur.execute('''UPDATE vps 
+                           SET suspended = 1, status = 'stopped'
+                           WHERE id = ?''', (vps_id,))
+            
+            # Add to suspension history
+            cur.execute('SELECT suspension_history FROM vps WHERE id = ?', (vps_id,))
+            history = json.loads(cur.fetchone()[0] or '[]')
+            history.append({
+                'time': datetime.now().isoformat(),
+                'reason': f'VPS expired (was valid until {expires_at})',
+                'by': 'Auto-Suspension System'
+            })
+            cur.execute('UPDATE vps SET suspension_history = ? WHERE id = ?', 
+                       (json.dumps(history), vps_id))
+            
+            conn.commit()
+            conn.close()
+            
+            suspended_count += 1
+            logger.info(f"Auto-suspended expired VPS: {container_name} (user: {user_id})")
+            
+        except Exception as e:
+            logger.error(f"Failed to suspend expired VPS {container_name}: {e}")
+    
+    return suspended_count
+
+def format_expiry_time(expires_at_str: str) -> Dict:
+    """Format expiry time into human-readable format with status"""
+    if not expires_at_str:
+        return {
+            'text': 'â¾ï¸ Never',
+            'status': 'permanent',
+            'color': 0x00ff88,
+            'emoji': 'â¾ï¸',
+            'hours_left': float('inf')
+        }
+    
+    expires_at = datetime.fromisoformat(expires_at_str)
+    now = datetime.now()
+    time_left = expires_at - now
+    
+    if time_left.total_seconds() <= 0:
+        return {
+            'text': 'â EXPIRED',
+            'status': 'expired',
+            'color': 0xff0000,
+            'emoji': 'â',
+            'hours_left': 0
+        }
+    
+    hours_left = time_left.total_seconds() / 3600
+    days_left = time_left.days
+    
+    if days_left > 7:
+        status_text = f"â {days_left} days"
+        status = 'safe'
+        color = 0x00ff88
+        emoji = 'â'
+    elif days_left > 1:
+        status_text = f"â ï¸ {days_left} days"
+        status = 'warning'
+        color = 0xffaa00
+        emoji = 'â ï¸'
+    elif hours_left > 1:
+        status_text = f"ð¨ {int(hours_left)} hours"
+        status = 'critical'
+        color = 0xff6600
+        emoji = 'ð¨'
+    else:
+        minutes_left = int(time_left.total_seconds() / 60)
+        status_text = f"â° {minutes_left} minutes"
+        status = 'urgent'
+        color = 0xff0000
+        emoji = 'â°'
+    
+    return {
+        'text': status_text,
+        'status': status,
+        'color': color,
+        'emoji': emoji,
+        'hours_left': hours_left,
+        'expires_at': expires_at.strftime('%Y-%m-%d %H:%M:%S')
+    }
+
+# ============================================
+# ADVANCED COINS FEATURES FUNCTIONS
+# ============================================
+
+# Achievements System
+def check_and_award_achievements(user_id: str):
+    """Check if user unlocked any achievements"""
+    conn = get_db()
+    cur = conn.cursor()
+    
+    # Get user stats
+    coins_data = get_user_coins(user_id)
+    
+    # Get user's VPS count
+    vps_count = len(vps_data.get(user_id, []))
+    
+    # Get completed quests count
+    cur.execute('SELECT COUNT(*) FROM user_quests WHERE user_id = ? AND completed = 1', (user_id,))
+    quests_completed = cur.fetchone()[0]
+    
+    # Get gifted coins
+    cur.execute('SELECT COALESCE(SUM(amount), 0) FROM coin_gifts WHERE sender_id = ?', (user_id,))
+    coins_gifted = cur.fetchone()[0]
+    
+    # Get work count
+    cur.execute('SELECT total_work_count FROM user_jobs WHERE user_id = ?', (user_id,))
+    work_row = cur.fetchone()
+    work_count = work_row[0] if work_row else 0
+    
+    # Get current streak
+    cur.execute('SELECT current_streak FROM user_streaks WHERE user_id = ?', (user_id,))
+    streak_row = cur.fetchone()
+    current_streak = streak_row[0] if streak_row else 0
+    
+    # Check all achievements
+    cur.execute('SELECT * FROM achievements')
+    achievements = cur.fetchall()
+    
+    newly_unlocked = []
+    
+    for achievement in achievements:
+        ach_id = achievement['id']
+        req_type = achievement['requirement_type']
+        req_value = achievement['requirement_value']
+        reward = achievement['reward_coins']
+        
+        # Check if already unlocked
+        cur.execute('SELECT id FROM user_achievements WHERE user_id = ? AND achievement_id = ?',
+                   (user_id, ach_id))
+        if cur.fetchone():
+            continue
+        
+        # Check requirement
+        unlocked = False
+        if req_type == 'coins_earned':
+            unlocked = coins_data['total_earned'] >= req_value
+        elif req_type == 'messages':
+            unlocked = coins_data['message_count'] >= req_value
+        elif req_type == 'voice_minutes':
+            unlocked = coins_data['voice_minutes'] >= req_value
+        elif req_type == 'invites':
+            unlocked = coins_data['invite_count'] >= req_value
+        elif req_type == 'balance':
+            unlocked = coins_data['balance'] >= req_value
+        elif req_type == 'streak':
+            unlocked = current_streak >= req_value
+        elif req_type == 'vps_count':
+            unlocked = vps_count >= req_value
+        elif req_type == 'quests_completed':
+            unlocked = quests_completed >= req_value
+        elif req_type == 'coins_gifted':
+            unlocked = coins_gifted >= req_value
+        elif req_type == 'work_count':
+            unlocked = work_count >= req_value
+        
+        if unlocked:
+            # Award achievement
+            cur.execute('''INSERT INTO user_achievements (user_id, achievement_id, unlocked_at)
+                           VALUES (?, ?, ?)''',
+                       (user_id, ach_id, datetime.now().isoformat()))
+            
+            # Award coins
+            add_coins(user_id, reward, 'achievement', f'Achievement: {achievement["name"]}')
+            
+            newly_unlocked.append(dict(achievement))
+    
+    conn.commit()
+    conn.close()
+    
+    return newly_unlocked
+
+def get_user_achievements(user_id: str) -> List[Dict]:
+    """Get user's unlocked achievements"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('''SELECT a.*, ua.unlocked_at 
+                   FROM achievements a
+                   JOIN user_achievements ua ON a.id = ua.achievement_id
+                   WHERE ua.user_id = ?
+                   ORDER BY ua.unlocked_at DESC''', (user_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+# Streaks System
+def update_daily_streak(user_id: str) -> Dict:
+    """Update user's daily streak"""
+    conn = get_db()
+    cur = conn.cursor()
+    
+    # Get current streak data
+    cur.execute('SELECT * FROM user_streaks WHERE user_id = ?', (user_id,))
+    row = cur.fetchone()
+    
+    today = datetime.now().date().isoformat()
+    
+    if not row:
+        # Create new streak
+        cur.execute('''INSERT INTO user_streaks 
+                       (user_id, current_streak, longest_streak, last_claim_date, streak_bonus_multiplier)
+                       VALUES (?, 1, 1, ?, 1.0)''',
+                   (user_id, today))
+        conn.commit()
+        conn.close()
+        return {'current_streak': 1, 'longest_streak': 1, 'bonus_multiplier': 1.0}
+    
+    last_claim = row['last_claim_date']
+    current_streak = row['current_streak']
+    longest_streak = row['longest_streak']
+    
+    if last_claim == today:
+        # Already claimed today
+        conn.close()
+        return {'current_streak': current_streak, 'longest_streak': longest_streak, 
+                'bonus_multiplier': row['streak_bonus_multiplier'], 'already_claimed': True}
+    
+    yesterday = (datetime.now().date() - timedelta(days=1)).isoformat()
+    
+    if last_claim == yesterday:
+        # Continue streak
+        current_streak += 1
+        longest_streak = max(longest_streak, current_streak)
+    else:
+        # Streak broken
+        current_streak = 1
+    
+    # Calculate bonus multiplier
+    streak_bonus = float(get_setting('streak_bonus_multiplier', 0.1))
+    max_bonus = float(get_setting('max_streak_bonus', 2.0))
+    bonus_multiplier = min(1.0 + (current_streak * streak_bonus), max_bonus)
+    
+    cur.execute('''UPDATE user_streaks 
+                   SET current_streak = ?, longest_streak = ?, last_claim_date = ?, 
+                       streak_bonus_multiplier = ?
+                   WHERE user_id = ?''',
+               (current_streak, longest_streak, today, bonus_multiplier, user_id))
+    
+    conn.commit()
+    conn.close()
+    
+    return {'current_streak': current_streak, 'longest_streak': longest_streak, 
+            'bonus_multiplier': bonus_multiplier}
+
+# Quests System
+def get_active_quests(user_id: str, quest_type: str = 'daily') -> List[Dict]:
+    """Get user's active quests"""
+    conn = get_db()
+    cur = conn.cursor()
+    
+    # Get or create user quests for today/week
+    cur.execute('''SELECT q.*, uq.progress, uq.completed, uq.id as user_quest_id
+                   FROM quests q
+                   LEFT JOIN user_quests uq ON q.id = uq.quest_id AND uq.user_id = ?
+                   WHERE q.duration = ? AND q.active = 1''',
+               (user_id, quest_type))
+    
+    quests = [dict(row) for row in cur.fetchall()]
+    
+    # Create quest entries if they don't exist
+    for quest in quests:
+        if quest['user_quest_id'] is None:
+            cur.execute('''INSERT INTO user_quests (user_id, quest_id, progress, started_at)
+                           VALUES (?, ?, 0, ?)''',
+                       (user_id, quest['id'], datetime.now().isoformat()))
+            quest['progress'] = 0
+            quest['completed'] = 0
+    
+    conn.commit()
+    conn.close()
+    
+    return quests
+
+def update_quest_progress(user_id: str, requirement_type: str, amount: int = 1):
+    """Update progress for relevant quests"""
+    conn = get_db()
+    cur = conn.cursor()
+    
+    # Get active quests matching the requirement type
+    cur.execute('''SELECT uq.id, uq.progress, q.requirement_value, q.reward_coins, q.name
+                   FROM user_quests uq
+                   JOIN quests q ON uq.quest_id = q.id
+                   WHERE uq.user_id = ? AND q.requirement_type = ? AND uq.completed = 0''',
+               (user_id, requirement_type))
+    
+    quests = cur.fetchall()
+    completed_quests = []
+    
+    for quest in quests:
+        quest_id, progress, req_value, reward, name = quest
+        new_progress = progress + amount
+        
+        if new_progress >= req_value and progress < req_value:
+            # Quest completed!
+            cur.execute('''UPDATE user_quests 
+                           SET progress = ?, completed = 1, completed_at = ?
+                           WHERE id = ?''',
+                       (new_progress, datetime.now().isoformat(), quest_id))
+            
+            # Award coins
+            add_coins(user_id, reward, 'quest', f'Quest completed: {name}')
+            completed_quests.append(name)
+        else:
+            cur.execute('UPDATE user_quests SET progress = ? WHERE id = ?',
+                       (new_progress, quest_id))
+    
+    conn.commit()
+    conn.close()
+    
+    return completed_quests
+
+# Boosters System
+def get_active_booster(user_id: str) -> Optional[Dict]:
+    """Get user's active booster"""
+    conn = get_db()
+    cur = conn.cursor()
+    
+    # Clean up expired boosters
+    cur.execute('''UPDATE active_boosters 
+                   SET active = 0 
+                   WHERE expires_at <= ? AND active = 1''',
+               (datetime.now().isoformat(),))
+    
+    # Get active booster
+    cur.execute('''SELECT * FROM active_boosters 
+                   WHERE user_id = ? AND active = 1 
+                   ORDER BY expires_at DESC LIMIT 1''',
+               (user_id,))
+    
+    row = cur.fetchone()
+    conn.commit()
+    conn.close()
+    
+    return dict(row) if row else None
+
+def activate_booster(user_id: str, multiplier: float, duration_seconds: int, booster_type: str = 'coins'):
+    """Activate a coin booster"""
+    expires_at = datetime.now() + timedelta(seconds=duration_seconds)
+    
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('''INSERT INTO active_boosters 
+                   (user_id, booster_type, multiplier, activated_at, expires_at, active)
+                   VALUES (?, ?, ?, ?, ?, 1)''',
+               (user_id, booster_type, multiplier, datetime.now().isoformat(), expires_at.isoformat()))
+    conn.commit()
+    conn.close()
+
+def apply_booster_multiplier(user_id: str, base_amount: int) -> int:
+    """Apply active booster to coin amount"""
+    booster = get_active_booster(user_id)
+    if booster:
+        return int(base_amount * booster['multiplier'])
+    return base_amount
+
+# Shop System
+def get_shop_items(item_type: str = None) -> List[Dict]:
+    """Get available shop items"""
+    conn = get_db()
+    cur = conn.cursor()
+    
+    if item_type:
+        cur.execute('SELECT * FROM shop_items WHERE purchasable = 1 AND item_type = ? ORDER BY price',
+                   (item_type,))
+    else:
+        cur.execute('SELECT * FROM shop_items WHERE purchasable = 1 ORDER BY item_type, price')
+    
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+def purchase_item(user_id: str, item_id: int):
+    """Purchase an item from the shop - Returns (success, message, item_data)"""
+    conn = get_db()
+    cur = conn.cursor()
+    
+    # Get item
+    cur.execute('SELECT * FROM shop_items WHERE id = ?', (item_id,))
+    item = cur.fetchone()
+    
+    if not item:
+        conn.close()
+        return False, "Item not found", None
+    
+    if not item['purchasable']:
+        conn.close()
+        return False, "Item not available for purchase", None
+    
+    # Check stock
+    if item['stock'] != -1 and item['stock'] <= 0:
+        conn.close()
+        return False, "Item out of stock", None
+    
+    # Check balance
+    coins_data = get_user_coins(user_id)
+    if coins_data['balance'] < item['price']:
+        conn.close()
+        return False, f"Insufficient coins. Need {item['price']:,}, have {coins_data['balance']:,}", None
+    
+    # Process purchase
+    success, new_balance = remove_coins(user_id, item['price'], 'shop_purchase', 
+                                       f"Purchased: {item['name']}")
+    
+    if not success:
+        conn.close()
+        return False, "Payment failed", None
+    
+    # Record purchase
+    cur.execute('''INSERT INTO user_purchases (user_id, item_id, purchased_at, active)
+                   VALUES (?, ?, ?, 1)''',
+               (user_id, item_id, datetime.now().isoformat()))
+    
+    # Update stock
+    if item['stock'] != -1:
+        cur.execute('UPDATE shop_items SET stock = stock - 1 WHERE id = ?', (item_id,))
+    
+    conn.commit()
+    conn.close()
+    
+    return True, "Purchase successful", dict(item)
+
+# Coin Gifting
+def gift_coins(sender_id: str, receiver_id: str, amount: int, message: str = None):
+    """Gift coins to another user - Returns (success, message)"""
+    if sender_id == receiver_id:
+        return False, "You cannot gift coins to yourself"
+    
+    if amount <= 0:
+        return False, "Amount must be positive"
+    
+    # Check sender balance
+    sender_coins = get_user_coins(sender_id)
+    if sender_coins['balance'] < amount:
+        return False, f"Insufficient coins. You have {sender_coins['balance']:,} coins"
+    
+    # Transfer coins
+    success, _ = remove_coins(sender_id, amount, 'gift_sent', f'Gift to user {receiver_id}')
+    if not success:
+        return False, "Transfer failed"
+    
+    add_coins(receiver_id, amount, 'gift_received', f'Gift from user {sender_id}')
+    
+    # Record gift
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute('''INSERT INTO coin_gifts (sender_id, receiver_id, amount, message, sent_at)
+                   VALUES (?, ?, ?, ?, ?)''',
+               (sender_id, receiver_id, amount, message, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+    
+    return True, f"Successfully gifted {amount:,} coins"
+
+# Work/Jobs System
+def work_for_coins(user_id: str):
+    """Work to earn coins (cooldown applies)"""
+    conn = get_db()
+    cur = conn.cursor()
+    
+    # Get or create job data
+    cur.execute('SELECT * FROM user_jobs WHERE user_id = ?', (user_id,))
+    job_data = cur.fetchone()
+    
+    if not job_data:
+        cur.execute('''INSERT INTO user_jobs (user_id, current_job, job_level, last_work_time)
+                       VALUES (?, 'Beginner', 1, NULL)''',
+                   (user_id,))
+        conn.commit()
+        job_data = {'current_job': 'Beginner', 'job_level': 1, 'last_work_time': None, 
+                   'job_experience': 0, 'total_work_count': 0}
+    else:
+        job_data = dict(job_data)
+    
+    # Check cooldown (4 hours)
+    if job_data['last_work_time']:
+        last_work = datetime.fromisoformat(job_data['last_work_time'])
+        cooldown = timedelta(hours=4)
+        if datetime.now() - last_work < cooldown:
+            time_left = cooldown - (datetime.now() - last_work)
+            hours = int(time_left.total_seconds() // 3600)
+            minutes = int((time_left.total_seconds() % 3600) // 60)
+            conn.close()
+            return False, 0, f"You can work again in {hours}h {minutes}m"
+    
+    # Calculate earnings based on job level
+    base_earnings = 50
+    level_bonus = job_data['job_level'] * 10
+    earnings = base_earnings + level_bonus + random.randint(-10, 20)
+    
+    # Apply booster
+    earnings = apply_booster_multiplier(user_id, earnings)
+    
+    # Award coins
+    add_coins(user_id, earnings, 'work', f"Work as {job_data['current_job']} (Level {job_data['job_level']})")
+    
+    # Update job data
+    new_exp = job_data['job_experience'] + 10
+    new_level = job_data['job_level']
+    new_job = job_data['current_job']
+    
+    # Level up check
+    exp_needed = new_level * 100
+    if new_exp >= exp_needed:
+        new_level += 1
+        new_exp = 0
+        
+        # Job progression
+        jobs = ['Beginner', 'Worker', 'Professional', 'Expert', 'Master', 'Legend']
+        job_index = min(new_level // 5, len(jobs) - 1)
+        new_job = jobs[job_index]
+    
+    cur.execute('''UPDATE user_jobs 
+                   SET last_work_time = ?, job_experience = ?, job_level = ?, 
+                       current_job = ?, total_work_count = total_work_count + 1
+                   WHERE user_id = ?''',
+               (datetime.now().isoformat(), new_exp, new_level, new_job, user_id))
+    
+    conn.commit()
+    conn.close()
+    
+    level_up_msg = f"\nð Level up! Now Level {new_level} {new_job}!" if new_level > job_data['job_level'] else ""
+    
+    return True, earnings, f"You earned {earnings:,} coins!{level_up_msg}"
+
 # Initialize database
 init_db()
 
@@ -442,36 +1756,18 @@ init_db()
 vps_data = get_vps_data()
 admin_data = {'admins': get_admins()}
 
-# Auto-save flag to prevent constant file writes
-_auto_save_pending = False
-
-def mark_for_save():
-    """Mark data for auto-save"""
-    global _auto_save_pending
-    _auto_save_pending = True
-
-async def auto_save_task():
-    """Background task to auto-save VPS data periodically"""
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        try:
-            global _auto_save_pending
-            if _auto_save_pending:
-                save_vps_data()
-                _auto_save_pending = False
-                logger.debug("Auto-saved VPS data")
-        except Exception as e:
-            logger.error(f"Error in auto-save task: {e}")
-        await asyncio.sleep(2)  # Check every 2 seconds
-
-def save_vps_data_immediate():
-    """Immediate save - call this for critical operations"""
-    save_vps_data()
-    mark_for_save()  # Ensure it's saved
-
 # Global settings from DB
 CPU_THRESHOLD = int(get_setting('cpu_threshold', 90))
 RAM_THRESHOLD = int(get_setting('ram_threshold', 90))
+
+# ============================================
+# MAINTENANCE MODE
+# ============================================
+MAINTENANCE_MODE = get_setting('maintenance_mode', '0') == '1'
+
+def is_admin_id(user_id: str) -> bool:
+    """Check if a user id is the main admin or a listed admin"""
+    return user_id == str(MAIN_ADMIN_ID) or user_id in admin_data.get("admins", [])
 
 # Bot setup
 intents = discord.Intents.default()
@@ -479,24 +1775,19 @@ intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
+@bot.check
+async def maintenance_mode_check(ctx):
+    """Block all commands for non-admins while maintenance mode is on"""
+    if MAINTENANCE_MODE and not is_admin_id(str(ctx.author.id)):
+        await ctx.send(embed=create_error_embed(
+            "ð ï¸ Maintenance Mode",
+            f"{BOT_NAME} is currently under maintenance. Please try again later."
+        ))
+        return False
+    return True
+
 # Resource monitoring settings (logging only)
 resource_monitor_active = True
-
-# ═══════════════════════════════════════════════════════════════════════════
-# MODERN UI/UX SYSTEM - Beautiful Discord Embeds
-# ═══════════════════════════════════════════════════════════════════════════
-
-# Professional Color Palette
-COLOR_PRIMARY = 0x2c3e50      # Dark slate blue
-COLOR_SUCCESS = 0x27ae60      # Modern green  
-COLOR_ERROR = 0xe74c3c        # Bright red
-COLOR_WARNING = 0xf39c12      # Amber
-COLOR_INFO = 0x3498db         # Ocean blue
-COLOR_NETWORK = 0x16a085      # Teal
-COLOR_EXPIRED = 0xc0392b      # Dark red
-COLOR_ACTIVE = 0x16a085       # Teal green
-COLOR_SUSPENDED = 0x95a5a6    # Gray
-COLOR_NODE = 0x8e44ad         # Purple
 
 # Helper function to truncate text
 def truncate_text(text, max_length=1024):
@@ -506,197 +1797,220 @@ def truncate_text(text, max_length=1024):
         return text
     return text[:max_length-3] + "..."
 
-# Password generation and management functions
-def generate_strong_password(length=16):
-    """Generate a cryptographically strong password"""
-    # Use mix of uppercase, lowercase, digits, and special characters
-    charset = string.ascii_letters + string.digits + "!@#$%^&*"
-    password = ''.join(secrets.choice(charset) for _ in range(length))
-    return password
+# ============================================
+# PREMIUM EMBED SYSTEM - Modern UI/UX Design
+# ============================================
 
-def sanitize_username_for_container(username: str) -> str:
+class EmbedColors:
+    """Premium color palette for modern UI"""
+    PRIMARY = 0x5865F2      # Discord Blurple - Primary actions
+    SUCCESS = 0x57F287      # Green - Success states
+    ERROR = 0xED4245        # Red - Error states
+    WARNING = 0xFEE75C      # Yellow - Warning states
+    INFO = 0x5865F2         # Blue - Information
+    PREMIUM = 0xEB459E      # Pink - Premium features
+    GOLD = 0xF1C40F         # Gold - Economy/Coins
+    PURPLE = 0x9B59B6       # Purple - Special features
+    DARK = 0x2B2D31         # Dark - Neutral
+    LIGHT = 0x99AAB5        # Light Gray - Secondary info
+
+class EmbedIcons:
+    """Modern icon system for consistent branding"""
+    SUCCESS = "â"
+    ERROR = "â"
+    WARNING = "â "
+    INFO = "â¹"
+    LOADING = "â³"
+    PREMIUM = "â"
+    ARROW = "â"
+    BULLET = "â¢"
+    DIVIDER = "â"
+    
+def create_embed(title, description="", color=EmbedColors.PRIMARY, show_branding=True):
     """
-    Sanitize username for LXC container naming.
-    LXC only allows alphanumeric and hyphen characters.
-    Replace underscores, spaces, and other invalid chars with hyphens.
+    Create a premium-styled Discord embed with modern design principles
+    
+    Args:
+        title: Main title (clean, no emoji prefix)
+        description: Main content
+        color: Hex color code
+        show_branding: Whether to show footer branding
     """
-    # Replace underscores and spaces with hyphens
-    sanitized = username.replace('_', '-').replace(' ', '-')
-    # Remove any character that's not alphanumeric or hyphen
-    sanitized = ''.join(c for c in sanitized if c.isalnum() or c == '-')
-    # Ensure it doesn't start or end with hyphen (LXC requirement)
-    sanitized = sanitized.strip('-').lower()
-    # Limit length to avoid issues (LXC container names have limits)
-    sanitized = sanitized[:30]
-    return sanitized
-
-def get_vps_password(container_name):
-    """Get password from VPS data"""
-    for user_id, vps_list in vps_data.items():
-        for vps in vps_list:
-            if vps['container_name'] == container_name:
-                return vps.get('root_password', None)
-    return None
-
-def set_vps_password(container_name, password):
-    """Set password for VPS"""
-    for user_id, vps_list in vps_data.items():
-        for vps in vps_list:
-            if vps['container_name'] == container_name:
-                vps['root_password'] = password
-                save_vps_data_immediate()
-                return True
-    return False
-
-async def configure_ssh(container_name, node_id, password):
-    """Configure SSH on VPS and set root password"""
-    try:
-        # Simple SSH configuration commands
-        ssh_config_content = """Port 22
-AddressFamily any
-ListenAddress 0.0.0.0
-ListenAddress ::
-PasswordAuthentication yes
-PubkeyAuthentication yes
-PermitRootLogin yes
-PermitEmptyPasswords no
-ChallengeResponseAuthentication no
-UsePAM yes
-MaxAuthTries 6
-MaxSessions 10
-SyslogFacility AUTH
-LogLevel INFO
-X11Forwarding yes
-X11DisplayOffset 10
-PrintMotd no
-PrintLastLog yes
-TCPKeepAlive yes
-PermitUserEnvironment no
-Subsystem sftp /usr/lib/openssh/sftp-server"""
-
-        # Create SSH config using Python string, escaping properly
-        config_cmd = ssh_config_content.replace('\n', '\\n')
-        
-        # Apply SSH configuration
-        await execute_lxc(container_name, 
-            f'exec {container_name} -- bash -c "echo -e \\"{config_cmd}\\" > /etc/ssh/sshd_config"',
-            node_id=node_id)
-        logger.info(f"SSH config file written on {container_name}")
-        
-        # Restart SSH service with multiple fallbacks
-        restart_cmd = "systemctl restart ssh 2>/dev/null || service ssh restart 2>/dev/null || /etc/init.d/ssh restart 2>/dev/null || true"
-        await execute_lxc(container_name,
-            f'exec {container_name} -- bash -c "{restart_cmd}"',
-            node_id=node_id)
-        logger.info(f"SSH service restarted on {container_name}")
-        
-        # Set root password using chpasswd (non-interactive and reliable)
-        await execute_lxc(container_name,
-            f"exec {container_name} -- bash -c \"echo 'root:{password}' | chpasswd\"",
-            node_id=node_id)
-        logger.info(f"Root password set for {container_name}")
-        
-        # Store password
-        set_vps_password(container_name, password)
-        return True, password
-    except Exception as e:
-        logger.error(f"Failed to configure SSH for {container_name}: {e}")
-        return False, str(e)
-
-def truncate_text(text, max_length=1024):
-    if not text:
-        return text
-    if len(text) <= max_length:
-        return text
-    return text[:max_length-3] + "..."
-
-# Create professional embeds with modern styling
-def create_embed(title, description="", color=COLOR_PRIMARY):
-    """Create a beautiful, modern embed"""
+    # Clean title - no emoji spam
+    clean_title = truncate_text(title, 256)
+    
     embed = discord.Embed(
-        title=f"🌟 {title}",
-        description=truncate_text(description, 4096),
-        color=color
+        title=clean_title,
+        description=truncate_text(description, 4096) if description else None,
+        color=color,
+        timestamp=datetime.now(timezone.utc)
     )
-    embed.set_thumbnail(url=BOT_THUMBNAIL_URL)
-    embed.set_footer(
-        text=f"Made by Hopingboyz • v{BOT_VERSION} • {datetime.now().strftime('%H:%M:%S')}",
-        icon_url=BOT_ICON_URL
-    )
-    embed.timestamp = datetime.now()
+    
+    # Premium footer with minimal branding
+    if show_branding:
+        embed.set_footer(
+            text=f"{BOT_NAME} v{BOT_VERSION} {EmbedIcons.BULLET} Powered by {BOT_DEVELOPER}",
+            icon_url="https://i.imgur.com/dpatuSj.png"
+        )
+    
     return embed
 
 def add_field(embed, name, value, inline=False):
-    """Add a field with professional formatting"""
+    """
+    Add a field with clean formatting
+    
+    Args:
+        embed: Discord embed object
+        name: Field name (clean, minimal icons)
+        value: Field value
+        inline: Whether to display inline
+    """
+    # Clean field name - minimal decoration
+    clean_name = truncate_text(name, 256)
+    clean_value = truncate_text(value if value else "N/A", 1024)
+    
     embed.add_field(
-        name=f"➤ {name}",
-        value=truncate_text(value, 1024),
+        name=clean_name,
+        value=clean_value,
         inline=inline
     )
     return embed
 
-def create_success_embed(title, description=""):
-    """Create a success embed (green)"""
-    return create_embed(title, description, COLOR_SUCCESS)
+def create_success_embed(title, description="", show_icon=True):
+    """
+    Success state embed - Clean green design
+    
+    Usage: Successful operations, confirmations
+    """
+    icon = f"{EmbedIcons.SUCCESS} " if show_icon else ""
+    return create_embed(f"{icon}{title}", description, color=EmbedColors.SUCCESS)
 
-def create_error_embed(title, description=""):
-    """Create an error embed (red)"""
-    return create_embed(title, description, COLOR_ERROR)
+def create_error_embed(title, description="", show_icon=True):
+    """
+    Error state embed - Clean red design
+    
+    Usage: Errors, failures, access denied
+    """
+    icon = f"{EmbedIcons.ERROR} " if show_icon else ""
+    return create_embed(f"{icon}{title}", description, color=EmbedColors.ERROR)
 
-def create_info_embed(title, description=""):
-    """Create an info embed (blue)"""
-    return create_embed(title, description, COLOR_INFO)
+def create_info_embed(title, description="", show_icon=True):
+    """
+    Information embed - Clean blue design
+    
+    Usage: General information, help text
+    """
+    icon = f"{EmbedIcons.INFO} " if show_icon else ""
+    return create_embed(f"{icon}{title}", description, color=EmbedColors.INFO)
 
-def create_warning_embed(title, description=""):
-    """Create a warning embed (orange)"""
-    return create_embed(title, description, COLOR_WARNING)
+def create_warning_embed(title, description="", show_icon=True):
+    """
+    Warning state embed - Clean yellow design
+    
+    Usage: Warnings, cautions, confirmations needed
+    """
+    icon = f"{EmbedIcons.WARNING} " if show_icon else ""
+    return create_embed(f"{icon}{title}", description, color=EmbedColors.WARNING)
 
-# Visual helper functions
-def create_progress_bar(value, max_value=100, length=15):
-    """Create a visual progress bar with emoji blocks"""
-    if max_value == 0:
+def create_premium_embed(title, description=""):
+    """
+    Premium feature embed - Special pink/purple design
+    
+    Usage: Premium features, special announcements
+    """
+    return create_embed(f"{EmbedIcons.PREMIUM} {title}", description, color=EmbedColors.PREMIUM)
+
+def create_loading_embed(title, description="Processing your request..."):
+    """
+    Loading state embed - Indicates ongoing process
+    
+    Usage: Long-running operations
+    """
+    return create_embed(f"{EmbedIcons.LOADING} {title}", description, color=EmbedColors.INFO)
+
+def create_card_embed(title, description="", color=EmbedColors.DARK):
+    """
+    Card-style embed for displaying structured data
+    
+    Usage: VPS info, user profiles, statistics
+    """
+    embed = create_embed(title, description, color)
+    return embed
+
+def format_progress_bar(current, maximum, length=10, filled="â", empty="â"):
+    """
+    Create a modern progress bar
+    
+    Args:
+        current: Current value
+        maximum: Maximum value
+        length: Bar length in characters
+        filled: Character for filled portion
+        empty: Character for empty portion
+    
+    Returns:
+        Formatted progress bar string with percentage
+    """
+    if maximum == 0:
         percentage = 0
     else:
-        percentage = int((value / max_value) * 100)
-    filled = int((percentage / 100) * length)
-    bar = "🟩" * filled + "⬜" * (length - filled)
-    return f"{bar} `{percentage}%`"
+        percentage = min(100, int((current / maximum) * 100))
+    
+    filled_length = int((percentage / 100) * length)
+    bar = filled * filled_length + empty * (length - filled_length)
+    
+    return f"{bar} {percentage}%"
 
-def format_expiration(vps):
-    """Format expiration date with visual badge"""
-    if not vps.get('expiration_date'):
-        return "🔵 No expiration"
+def format_status_badge(status, online_text="Online", offline_text="Offline"):
+    """
+    Create a status badge with color indicator
     
-    exp_dt = datetime.fromisoformat(vps['expiration_date'])
-    days = (exp_dt - datetime.now()).days
+    Args:
+        status: Boolean or string status
+        online_text: Text for online/active state
+        offline_text: Text for offline/inactive state
     
-    if days < 0:
-        return f"🔴 **EXPIRED** (`{abs(days)}d ago`)"
-    elif days <= EXPIRATION_WARNING_DAYS:
-        return f"🟡 **EXPIRING** (`{days}d left`)"
+    Returns:
+        Formatted status string with indicator
+    """
+    if isinstance(status, bool):
+        is_online = status
     else:
-        return f"🟢 **ACTIVE** (`{days}d left`)"
+        is_online = status.lower() in ['running', 'online', 'active', 'started']
+    
+    indicator = "ð¢" if is_online else "ð´"
+    text = online_text if is_online else offline_text
+    
+    return f"{indicator} **{text}**"
 
-def create_vps_card(vps, index):
-    """Create a formatted VPS information card"""
-    node = get_node(vps.get('node_id', 1))
-    status_emoji = "🟢" if (vps.get('status') == 'running' and not vps.get('suspended')) else "🟡" if vps.get('suspended') else "🔴"
-    node_emoji = "📍" if (node and node.get('is_local')) else "🌐"
+def format_metric(label, value, unit="", icon=""):
+    """
+    Format a metric with consistent styling
     
-    card = (
-        f"**#{index}** `{vps['container_name']}`\n"
-        f"{status_emoji} {vps.get('status', 'unknown').upper()}"
-    )
-    if vps.get('suspended'):
-        card += " (SUSPENDED)"
+    Args:
+        label: Metric label
+        value: Metric value
+        unit: Unit of measurement
+        icon: Optional icon
     
-    card += (
-        f"\n⚙️ **Config:** {vps.get('config', 'Custom')}\n"
-        f"💾 **RAM:** {vps['ram']} | **CPU:** {vps['cpu']} | **Disk:** {vps['storage']}\n"
-        f"{node_emoji} **Node:** {node['name'] if node else 'Unknown'}\n"
-        f"⏰ **Expiration:** {format_expiration(vps)}"
-    )
-    return card
+    Returns:
+        Formatted metric string
+    """
+    icon_str = f"{icon} " if icon else ""
+    unit_str = f" {unit}" if unit else ""
+    return f"{icon_str}**{label}:** {value}{unit_str}"
+
+def create_divider(char="â", length=30):
+    """Create a visual divider for embed sections"""
+    return char * length
+
+def format_list_item(text, bullet=EmbedIcons.BULLET):
+    """Format a list item with consistent bullet style"""
+    return f"{bullet} {text}"
+
+def create_section_header(text):
+    """Create a section header with subtle styling"""
+    return f"**{text}**"
 
 # Admin checks
 def is_admin():
@@ -725,7 +2039,6 @@ async def execute_lxc(container_name: str, command: str, timeout=120, node_id: O
     
     full_command = f"lxc {command}"
     
-    # is_local is already boolean from get_node()
     if node['is_local']:
         try:
             cmd = shlex.split(full_command)
@@ -753,52 +2066,40 @@ async def execute_lxc(container_name: str, command: str, timeout=120, node_id: O
             logger.error(f"LXC Error: {full_command} - {str(e)}")
             raise
     else:
-        # Use Remote Node API - handle unreachable nodes gracefully with proper error reporting
         url = f"{node['url']}/api/execute"
         data = {"command": full_command}
         params = {"api_key": node["api_key"]}
         try:
             response = requests.post(url, json=data, params=params, timeout=timeout)
             
-            # Check for HTTP errors first
-            if response.status_code != 200:
-                error_msg = f"HTTP {response.status_code}"
-                try:
-                    error_detail = response.json()
-                    if 'detail' in error_detail:
-                        error_msg = error_detail['detail']
-                    elif 'error' in error_detail:
-                        error_msg = error_detail['error']
-                    elif 'stderr' in error_detail:
-                        error_msg = error_detail['stderr']
-                except:
-                    pass
-                raise Exception(f"Remote execution failed on {node['name']}: {error_msg}\nCommand: {full_command}")
+            # Try to get detailed error information
+            try:
+                error_detail = response.json()
+                if 'detail' in error_detail:
+                    error_msg = error_detail['detail']
+                elif 'error' in error_detail:
+                    error_msg = error_detail['error']
+                else:
+                    error_msg = response.text
+            except:
+                error_msg = response.text
             
-            # Parse successful response
+            response.raise_for_status()
+            
             res = response.json()
             if res.get("returncode", 1) != 0:
                 stderr = res.get("stderr", "Command failed")
-                logger.warning(f"Remote command failed on node {node['name']}: {stderr}")
+                # Add more context to remote error
                 raise Exception(f"Remote LXC command failed on {node['name']}: {stderr}\nCommand: {full_command}")
-            
             return res.get("stdout", True)
             
-        except requests.exceptions.ConnectionError as ce:
-            # Network error - node is unreachable (log as debug to avoid spam)
-            logger.debug(f"Node {node['name']} unreachable at {node['url']} - network connection failed")
-            raise Exception(f"Node {node['name']} is unreachable (network error). The remote node may be offline.")
-        except requests.exceptions.Timeout:
-            # Timeout error
-            logger.warning(f"Remote execution timed out on node {node['name']}")
-            raise Exception(f"Remote execution timed out on {node['name']} (timeout after {timeout}s)")
         except requests.exceptions.RequestException as e:
-            # Other request errors
-            logger.warning(f"Remote execution error on node {node['name']}: {str(e)}")
-            raise Exception(f"Remote execution failed on {node['name']}: {str(e)}")
-        except Exception as e:
-            logger.error(f"Unexpected error executing command on node {node['name']}: {str(e)}")
-            raise
+            logger.error(f"Remote LXC error on node {node['name']} ({url}): {str(e)}")
+            # Include URL and status code if available
+            if hasattr(e.response, 'status_code'):
+                raise Exception(f"Remote execution failed on {node['name']}: HTTP {e.response.status_code} - {str(e)}")
+            else:
+                raise Exception(f"Remote execution failed on {node['name']}: {str(e)}")
 
 # Apply LXC config
 async def apply_lxc_config(container_name: str, node_id: int):
@@ -899,222 +2200,96 @@ async def get_or_create_vps_role(guild):
 
 # Host resource functions
 def get_host_cpu_usage():
-    """Get host CPU usage - cross-platform compatible"""
+    """Get host CPU usage - cross-platform"""
     try:
-        import platform
-        system = platform.system()
+        # Try using psutil first (cross-platform)
+        try:
+            import psutil
+            return psutil.cpu_percent(interval=1)
+        except ImportError:
+            pass
         
-        if system == "Windows":
-            # Windows: Use wmic or psutil as fallback
-            try:
-                import psutil
-                return psutil.cpu_percent(interval=1)
-            except ImportError:
-                # Fallback for Windows without psutil
-                try:
-                    result = subprocess.run(['wmic', 'os', 'get', 'TotalVisibleMemorySize'], 
-                                          capture_output=True, text=True, timeout=5)
-                    return 0.0  # Default value on Windows
-                except:
-                    return 0.0
-        else:
-            # Linux/Unix: Use mpstat or top
-            if shutil.which("mpstat"):
-                result = subprocess.run(['mpstat', '1', '1'], capture_output=True, text=True, timeout=10)
-                output = result.stdout
-                for line in output.split('\n'):
-                    if 'all' in line and '%' in line:
-                        parts = line.split()
-                        idle = float(parts[-1])
-                        return 100.0 - idle
-            else:
-                result = subprocess.run(['top', '-bn1'], capture_output=True, text=True, timeout=10)
-                output = result.stdout
-                for line in output.split('\n'):
-                    if '%Cpu(s):' in line:
-                        # Parse CPU line - format: %Cpu(s): us,sy,ni,id,wa,hi,si,st
-                        cpu_data = line.split('%Cpu(s):')[1].strip()
-                        parts = []
-                        for item in cpu_data.split(','):
-                            val = item.split()[0].strip()
-                            try:
-                                parts.append(float(val))
-                            except ValueError:
-                                parts.append(0.0)
-                        
-                        if len(parts) >= 8:
-                            us = parts[0]
-                            sy = parts[1]
-                            ni = parts[2]
-                            id_ = parts[3]
-                            wa = parts[4]
-                            hi = parts[5]
-                            si = parts[6]
-                            st = parts[7]
-                            usage = us + sy + ni + wa + hi + si + st
-                            return usage
-            return 0.0
+        # Linux fallback
+        if shutil.which("mpstat"):
+            result = subprocess.run(['mpstat', '1', '1'], capture_output=True, text=True)
+            output = result.stdout
+            for line in output.split('\n'):
+                if 'all' in line and '%' in line:
+                    parts = line.split()
+                    idle = float(parts[-1])
+                    return 100.0 - idle
+        elif shutil.which("top"):
+            result = subprocess.run(['top', '-bn1'], capture_output=True, text=True)
+            output = result.stdout
+            for line in output.split('\n'):
+                if '%Cpu(s):' in line:
+                    parts = line.split()
+                    us = float(parts[1])
+                    sy = float(parts[3])
+                    ni = float(parts[5])
+                    id_ = float(parts[7])
+                    wa = float(parts[9])
+                    hi = float(parts[11])
+                    si = float(parts[13])
+                    st = float(parts[15])
+                    usage = us + sy + ni + wa + hi + si + st
+                    return usage
+        return 0.0
     except Exception as e:
-        logger.debug(f"Error getting CPU usage: {e}")
+        logger.error(f"Error getting CPU usage: {e}")
         return 0.0
 
 def get_host_ram_usage():
-    """Get host RAM usage - cross-platform compatible"""
+    """Get host RAM usage - cross-platform"""
     try:
-        import platform
-        system = platform.system()
+        # Try using psutil first (cross-platform)
+        try:
+            import psutil
+            return psutil.virtual_memory().percent
+        except ImportError:
+            pass
         
-        if system == "Windows":
-            # Windows: Use psutil or wmic
-            try:
-                import psutil
-                mem = psutil.virtual_memory()
-                return mem.percent
-            except ImportError:
-                # Fallback for Windows without psutil
-                try:
-                    result = subprocess.run(['wmic', 'OS', 'get', 'TotalVisibleMemorySize,FreePhysicalMemory'], 
-                                          capture_output=True, text=True, timeout=5)
-                    lines = result.stdout.strip().split('\n')
-                    if len(lines) > 1:
-                        values = lines[1].split()
-                        if len(values) >= 2:
-                            total = int(values[0])
-                            free = int(values[1])
-                            used = total - free
-                            return (used / total * 100) if total > 0 else 0.0
-                except:
-                    pass
-                return 0.0
-        else:
-            # Linux/Unix: Use free command
-            result = subprocess.run(['free', '-m'], capture_output=True, text=True, timeout=10)
+        # Linux fallback
+        if shutil.which("free"):
+            result = subprocess.run(['free', '-m'], capture_output=True, text=True)
             lines = result.stdout.splitlines()
             if len(lines) > 1:
                 mem = lines[1].split()
                 total = int(mem[1])
                 used = int(mem[2])
                 return (used / total * 100) if total > 0 else 0.0
-            return 0.0
+        return 0.0
     except Exception as e:
-        logger.debug(f"Error getting RAM usage: {e}")
+        logger.error(f"Error getting RAM usage: {e}")
         return 0.0
 
 async def get_host_stats(node_id: int) -> Dict:
     node = get_node(node_id)
     if node['is_local']:
-        return {
-            "cpu": get_host_cpu_usage(),
-            "ram": get_host_ram_usage(),
-            "disk": get_host_disk_usage()
-        }
+        return {"cpu": get_host_cpu_usage(), "ram": get_host_ram_usage()}
     else:
-        # Remote node - handle gracefully if unreachable
         url = f"{node['url']}/api/get_host_stats"
         params = {"api_key": node["api_key"]}
         try:
-            response = requests.get(url, params=params, timeout=10)
+            response = requests.get(url, params=params)
             response.raise_for_status()
-            stats = response.json()
-            # Fallbacks if remote API doesn't provide
-            stats['disk'] = stats.get('disk', 'Unknown')
-            return stats
-        except requests.exceptions.ConnectionError:
-            # Remote node unreachable - return graceful defaults
-            logger.debug(f"Remote node {node['name']} unreachable - returning default stats")
-            return {"cpu": 0.0, "ram": 0.0, "disk": "Unknown"}
+            return response.json()
         except Exception as e:
-            logger.debug(f"Failed to get stats from remote node {node['name']}: {e}")
-            return {"cpu": 0.0, "ram": 0.0, "disk": "Unknown"}
-
-def check_vps_expiration():
-    """Check and auto-suspend expired VPS"""
-    global bot
-    try:
-        warned_users = set()
-        
-        for user_id, vps_list in vps_data.items():
-            for vps in vps_list:
-                if vps.get('expiration_date'):
-                    expiration_dt = datetime.fromisoformat(vps['expiration_date'])
-                    days_remaining = (expiration_dt - datetime.now()).days
-                    hours_remaining = ((expiration_dt - datetime.now()).total_seconds() / 3600)
-                    
-                    container_name = vps['container_name']
-                    node_id = vps.get('node_id', 1)
-                    
-                    # Auto-suspend if expired
-                    if days_remaining < 0:
-                        if not vps.get('suspended', False):
-                            try:
-                                # Suspend the VPS
-                                asyncio.run(execute_lxc(container_name, f"stop {container_name}", node_id=node_id))
-                                vps['status'] = 'stopped'
-                                vps['suspended'] = True
-                                vps['suspension_history'].append({
-                                    'time': datetime.now().isoformat(),
-                                    'reason': f'Auto-suspended due to VPS expiration on {expiration_dt.strftime("%Y-%m-%d")}',
-                                    'by': 'Expiration Monitor'
-                                })
-                                save_vps_data_immediate()
-                                logger.warning(f"VPS {container_name} auto-suspended due to expiration")
-                                
-                                # Notify owner
-                                try:
-                                    owner = asyncio.run(bot.fetch_user(int(user_id)))
-                                    dm_embed = create_error_embed("🔴 VPS Expired and Suspended",
-                                        f"Your VPS `{container_name}` has expired and been suspended.\n\n"
-                                        f"**Expiration Date:** {expiration_dt.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-                                        f"Contact an admin to renew your VPS.")
-                                    asyncio.run(owner.send(embed=dm_embed))
-                                except Exception as e:
-                                    logger.debug(f"Failed to notify user {user_id}: {e}")
-                            except Exception as e:
-                                logger.error(f"Failed to auto-suspend VPS {container_name}: {e}")
-                    
-                    # Send warning if expiring soon
-                    elif 0 < hours_remaining <= (EXPIRATION_WARNING_DAYS * 24):
-                        if user_id not in warned_users:
-                            try:
-                                owner = asyncio.run(bot.fetch_user(int(user_id)))
-                                dm_embed = create_warning_embed("⏰ VPS Expiring Soon",
-                                    f"Your VPS `{container_name}` will expire in {days_remaining} day(s)!\n\n"
-                                    f"**Expiration Date:** {expiration_dt.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-                                    f"Contact an admin to renew your VPS before it's automatically suspended.")
-                                asyncio.run(owner.send(embed=dm_embed))
-                                warned_users.add(user_id)
-                                logger.info(f"Sent expiration warning to user {user_id}")
-                            except Exception as e:
-                                logger.debug(f"Failed to notify user {user_id}: {e}")
-    except Exception as e:
-        logger.error(f"Error in VPS expiration check: {e}")
+            logger.error(f"Failed to get host stats from node {node['name']}: {e}")
+            return {"cpu": 0.0, "ram": 0.0}
 
 def resource_monitor():
     global resource_monitor_active
-    last_expiration_check = time.time()
-    expiration_check_interval = 3600  # Check every hour
-    
     while resource_monitor_active:
         try:
-            # Check VPS expiration every hour
-            if time.time() - last_expiration_check > expiration_check_interval:
-                check_vps_expiration()
-                last_expiration_check = time.time()
-            
             nodes = get_nodes()
             for node in nodes:
-                # Only monitor LOCAL nodes - skip remote nodes to avoid "No route to host" errors
-                if node['is_local']:
-                    stats = asyncio.run(get_host_stats(node['id']))
-                    cpu = stats['cpu']
-                    ram = stats['ram']
-                    logger.info(f"Node {node['name']}: CPU {cpu:.1f}%, RAM {ram:.1f}%")
-                    if cpu > CPU_THRESHOLD or ram > RAM_THRESHOLD:
-                        logger.warning(f"Node {node['name']} exceeded thresholds (CPU: {CPU_THRESHOLD}%, RAM: {RAM_THRESHOLD}%). Manual intervention required.")
-                else:
-                    # Remote nodes - skip monitoring to avoid connection errors
-                    logger.debug(f"Skipping remote node {node['name']} - remote nodes monitored on-demand only")
-            
+                stats = asyncio.run(get_host_stats(node['id']))
+                cpu = stats['cpu']
+                ram = stats['ram']
+                logger.info(f"Node {node['name']}: CPU {cpu:.1f}%, RAM {ram:.1f}%")
+                if cpu > CPU_THRESHOLD or ram > RAM_THRESHOLD:
+                    logger.warning(f"Node {node['name']} exceeded thresholds (CPU: {CPU_THRESHOLD}%, RAM: {RAM_THRESHOLD}%). Manual intervention required.")
             time.sleep(60)
         except Exception as e:
             logger.error(f"Error in resource monitor: {e}")
@@ -1137,20 +2312,15 @@ async def get_container_stats(container_name: str, node_id: Optional[int] = None
         uptime = await get_container_uptime_local(container_name)
         return {"status": status, "cpu": cpu, "ram": ram, "disk": disk, "uptime": uptime}
     else:
-        # Remote node - handle unreachable nodes gracefully without spamming logs
         url = f"{node['url']}/api/get_container_stats"
         data = {"container": container_name}
         params = {"api_key": node["api_key"]}
         try:
-            response = requests.post(url, json=data, params=params, timeout=10)
+            response = requests.post(url, json=data, params=params)
             response.raise_for_status()
             return response.json()
-        except requests.exceptions.ConnectionError:
-            # Remote node unreachable - return graceful defaults
-            logger.debug(f"Remote node {node['name']} unreachable for container {container_name}")
-            return {"status": "unknown", "cpu": 0.0, "ram": {"used": 0, "total": 0, "pct": 0.0}, "disk": "Unknown", "uptime": "Unknown"}
         except Exception as e:
-            logger.debug(f"Failed to get container stats from remote node {node['name']}: {e}")
+            logger.error(f"Failed to get container stats from node {node['name']}: {e}")
             return {"status": "unknown", "cpu": 0.0, "ram": {"used": 0, "total": 0, "pct": 0.0}, "disk": "Unknown", "uptime": "Unknown"}
 
 async def get_container_status_local(container_name: str):
@@ -1176,35 +2346,50 @@ async def get_container_cpu_pct_local(container_name: str):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        stdout, _ = await proc.communicate()
+        stdout, stderr = await proc.communicate()
         output = stdout.decode()
+        
+        # Try to parse CPU usage from top output
         for line in output.splitlines():
-            if '%Cpu(s):' in line:
-                # Parse CPU line - format: %Cpu(s): us,sy,ni,id,wa,hi,si,st
-                # Remove label and split by commas
-                cpu_data = line.split('%Cpu(s):')[1].strip()
-                parts = []
-                for item in cpu_data.split(','):
-                    # Extract number before the percentage/label
-                    val = item.split()[0].strip()
-                    try:
-                        parts.append(float(val))
-                    except ValueError:
-                        parts.append(0.0)
-                
-                if len(parts) >= 8:
-                    us = parts[0]  # user
-                    sy = parts[1]  # system
-                    ni = parts[2]  # nice
-                    id_ = parts[3] # idle
-                    wa = parts[4]  # wait
-                    hi = parts[5]  # hardware interrupt
-                    si = parts[6]  # software interrupt
-                    st = parts[7]  # steal
-                    return us + sy + ni + wa + hi + si + st
+            if '%Cpu(s):' in line or 'Cpu(s):' in line:
+                try:
+                    # Extract numbers from the line
+                    parts = line.split()
+                    cpu_total = 0.0
+                    
+                    # Parse each CPU component
+                    for i, part in enumerate(parts):
+                        if part in ['us,', 'sy,', 'ni,', 'wa,', 'hi,', 'si,', 'st,', 'st']:
+                            # Get the number before this label
+                            if i > 0:
+                                try:
+                                    value = float(parts[i-1].replace('%', '').replace(',', ''))
+                                    if part not in ['id,', 'id']:  # Skip idle
+                                        cpu_total += value
+                                except (ValueError, IndexError):
+                                    continue
+                    
+                    return cpu_total if cpu_total > 0 else 0.0
+                except Exception as e:
+                    logger.error(f"Error parsing CPU line for {container_name}: {e}")
+                    continue
+        
+        # Fallback: try to get CPU from /proc/stat inside container
+        proc = await asyncio.create_subprocess_exec(
+            "lxc", "exec", container_name, "--", "cat", "/proc/loadavg",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, _ = await proc.communicate()
+        output = stdout.decode().strip()
+        if output:
+            # Use load average as approximation (first value * 100 / num_cpus)
+            load = float(output.split()[0])
+            return min(load * 25, 100.0)  # Rough approximation
+        
         return 0.0
     except Exception as e:
-        logger.error(f"Error getting container CPU for {container_name}: {e}")
+        logger.error(f"Error getting CPU for {container_name}: {e}")
         return 0.0
 
 async def get_container_ram_local(container_name: str):
@@ -1281,65 +2466,6 @@ async def get_container_ram_pct(container_name: str, node_id: Optional[int] = No
     stats = await get_container_stats(container_name, node_id)
     return stats['ram']['pct']
 
-async def get_container_networks(container_name: str, node_id: Optional[int] = None) -> Dict[str, str]:
-    """Get all network interfaces and their IPs from a container using ip addr command"""
-    try:
-        if node_id is None:
-            node_id = find_node_id_for_container(container_name)
-        
-        # First attempt: Use simple ip addr show command
-        proc = await asyncio.create_subprocess_exec(
-            "lxc", "exec", container_name, "--", "ip", "addr", "show",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await proc.communicate()
-        
-        networks = {}
-        
-        if proc.returncode == 0:
-            output = stdout.decode().strip()
-            
-            # Parse ip addr show output
-            # Format: 
-            # 2: eth0: <BROADCAST,RUNNING> mtu 1500
-            #     inet 10.0.0.10/24 brd 10.0.0.255 scope global eth0
-            
-            lines = output.split('\n')
-            current_interface = None
-            
-            for line in lines:
-                # Check for interface line (starts with number and interface name)
-                if line and line[0].isdigit():
-                    # Extract interface name from line like "2: eth0: <BROADCAST>"
-                    parts = line.split(':')
-                    if len(parts) >= 2:
-                        current_interface = parts[1].strip()
-                
-                # Check for inet line (IPv4 address)
-                elif 'inet ' in line and current_interface:
-                    # Extract IP from line like "    inet 10.0.0.10/24 brd 10.0.0.255 scope global eth0"
-                    parts = line.strip().split()
-                    if len(parts) >= 2 and parts[0] == 'inet':
-                        ip_with_cidr = parts[1]
-                        ip = ip_with_cidr.split('/')[0]
-                        
-                        # Skip loopback
-                        if ip != "127.0.0.1" and current_interface != "lo":
-                            networks[current_interface] = ip
-        else:
-            logger.warning(f"Failed to get network info for {container_name}: {stderr.decode()}")
-        
-        if networks:
-            logger.info(f"Found {len(networks)} network interfaces on {container_name}: {networks}")
-        else:
-            logger.warning(f"No usable network interfaces found for {container_name}")
-        
-        return networks
-    except Exception as e:
-        logger.error(f"Error getting networks for {container_name}: {e}")
-        return {}
-
 async def get_container_disk(container_name: str, node_id: Optional[int] = None):
     stats = await get_container_stats(container_name, node_id)
     return stats['disk']
@@ -1349,34 +2475,34 @@ async def get_container_uptime(container_name: str, node_id: Optional[int] = Non
     return stats['uptime']
 
 def get_uptime():
-    """Get system uptime - cross-platform compatible"""
+    """Get system uptime - cross-platform"""
     try:
-        import platform
-        system = platform.system()
+        # Try using psutil first (cross-platform)
+        try:
+            import psutil
+            boot_time = psutil.boot_time()
+            uptime_seconds = time.time() - boot_time
+            days = int(uptime_seconds // 86400)
+            hours = int((uptime_seconds % 86400) // 3600)
+            minutes = int((uptime_seconds % 3600) // 60)
+            
+            if days > 0:
+                return f"{days}d {hours}h {minutes}m"
+            elif hours > 0:
+                return f"{hours}h {minutes}m"
+            else:
+                return f"{minutes}m"
+        except ImportError:
+            pass
         
-        if system == "Windows":
-            try:
-                result = subprocess.run(['net', 'statistics', 'server'], 
-                                      capture_output=True, text=True, timeout=5)
-                output = result.stdout
-                for line in output.split('\n'):
-                    if 'Statistics since' in line:
-                        return line.strip()
-                return "Unknown"
-            except:
-                # Fallback: use wmic
-                try:
-                    result = subprocess.run(['wmic', 'os', 'get', 'lastbootuptime'], 
-                                          capture_output=True, text=True, timeout=5)
-                    return result.stdout.strip() if result.stdout else "Unknown"
-                except:
-                    return "Unknown"
-        else:
-            # Linux/Unix: Use uptime command
-            result = subprocess.run(['uptime'], capture_output=True, text=True, timeout=5)
+        # Linux fallback
+        if shutil.which("uptime"):
+            result = subprocess.run(['uptime'], capture_output=True, text=True)
             return result.stdout.strip()
+        
+        return "Unknown"
     except Exception as e:
-        logger.debug(f"Error getting uptime: {e}")
+        logger.error(f"Error getting uptime: {e}")
         return "Unknown"
 
 # Try to detect default storage pool or use common defaults
@@ -1400,16 +2526,417 @@ async def on_ready():
     logger.info(f'{bot.user} has connected to Discord!')
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"{BOT_NAME} VPS Manager"))
     logger.info(f"{BOT_NAME} Bot is ready!")
-    # Start auto-save background task
-    if not bot.loop.is_running():
-        bot.loop.create_task(auto_save_task())
+    
+    # Start expiration checker
+    bot.loop.create_task(expiration_checker_loop())
+
+# ============================================
+# COINS EARNING EVENT HANDLERS
+# ============================================
+
+# Track last message time per user (for cooldown)
+user_message_cooldown = {}
+
+@bot.event
+async def on_message(message):
+    # Ignore bot messages
+    if message.author.bot:
+        await bot.process_commands(message)
+        return
+    
+    # Process commands first
+    await bot.process_commands(message)
+    
+    # DISABLED: Coin tracking temporarily disabled to prevent heartbeat blocking
+    # TODO: Re-enable with proper async database handling
+    # The coin system works but needs optimization for high-traffic servers
+    
+    return  # Skip coin tracking for now
+    
+    # Coin earning for messages (with cooldown) - run in background to not block
+    user_id = str(message.author.id)
+    current_time = time.time()
+    cooldown = int(get_setting('message_cooldown_seconds', 60))
+    coins_per_message = int(get_setting('coins_per_message', 1))
+    
+    # Check cooldown
+    if user_id in user_message_cooldown:
+        if current_time - user_message_cooldown[user_id] < cooldown:
+            return
+    
+    # Award coins in background task to not block event loop
+    user_message_cooldown[user_id] = current_time
+    
+    # Create background task for coin operations
+    async def process_coin_reward():
+        try:
+            # Run database operations in executor to not block
+            loop = asyncio.get_event_loop()
+            
+            def db_operation():
+                try:
+                    # Award coins
+                    add_coins(user_id, coins_per_message, 'message', f'Message in #{message.channel.name}')
+                    
+                    # Update message count
+                    conn = get_db()
+                    cur = conn.cursor()
+                    cur.execute('UPDATE user_coins SET message_count = message_count + 1 WHERE user_id = ?', (user_id,))
+                    conn.commit()
+                    conn.close()
+                    return True
+                except Exception as e:
+                    logger.error(f"Error in coin reward: {e}")
+                    return False
+            
+            # Run in executor to not block event loop
+            await loop.run_in_executor(None, db_operation)
+            
+            # Occasionally announce coin earnings (10% chance)
+            if random.random() < 0.1:
+                coins_data = get_user_coins(user_id)
+                if coins_data['balance'] % 100 == 0 and coins_data['balance'] > 0:
+                    embed = create_success_embed("ð° Milestone Reached!", 
+                        f"{message.author.mention} just reached **{coins_data['balance']} coins**! ð")
+                    await message.channel.send(embed=embed, delete_after=10)
+        except Exception as e:
+            logger.error(f"Error in process_coin_reward: {e}")
+    
+    # Start background task without waiting
+    asyncio.create_task(process_coin_reward())
+
+
+@bot.event
+async def on_member_join(member):
+    """Track invites when members join - WITH COMPREHENSIVE ANTI-EXPLOIT PROTECTION"""
+    # Ignore bots
+    if member.bot:
+        return
+    
+    try:
+        invites_before = bot.cached_invites.get(member.guild.id, {})
+        invites_after = await member.guild.invites()
+        
+        for invite in invites_after:
+            if invite.code in invites_before:
+                if invite.uses > invites_before[invite.code]:
+                    # Found the invite used
+                    inviter_id = str(invite.inviter.id)
+                    invited_id = str(member.id)
+                    
+                    # SECURITY: Check if user is restricted
+                    if is_user_restricted(inviter_id):
+                        log_security_event(inviter_id, 'restricted_invite_attempt',
+                                         f'Restricted user attempted to earn from invite: {member.name}',
+                                         'medium')
+                        break
+                    
+                    # SECURITY: Rate limit check (max 10 invites per hour)
+                    allowed, remaining = check_rate_limit(inviter_id, 'invite', 10, 60)
+                    if not allowed:
+                        log_security_event(inviter_id, 'invite_rate_limit',
+                                         f'Invite rate limit exceeded. {remaining}s remaining',
+                                         'medium')
+                        update_trust_score(inviter_id, -5, 'Invite spam detected')
+                        await notify_admins_security(
+                            "Invite Spam Detected",
+                            f"<@{inviter_id}> exceeded invite rate limit (10/hour)\n"
+                            f"Invited: {member.mention}",
+                            inviter_id
+                        )
+                        break
+                    
+                    conn = get_db()
+                    cur = conn.cursor()
+                    
+                    # ANTI-EXPLOIT: Check if this user was invited before (rejoin exploit)
+                    cur.execute('''SELECT * FROM invites 
+                                   WHERE inviter_id = ? AND invited_id = ?''',
+                               (inviter_id, invited_id))
+                    existing_invite = cur.fetchone()
+                    
+                    if existing_invite:
+                        # User rejoined - don't award coins again
+                        logger.info(f"Rejoin detected: {member.name} was already invited by {inviter_id}")
+                        log_security_event(inviter_id, 'rejoin_attempt',
+                                         f'User {member.name} rejoined - coins not awarded',
+                                         'low')
+                        conn.close()
+                        break
+                    
+                    # ANTI-EXPLOIT: Check if user joined recently (spam protection)
+                    cur.execute('''SELECT * FROM invites 
+                                   WHERE invited_id = ? AND joined_at > datetime('now', '-1 hour')''',
+                               (invited_id,))
+                    recent_join = cur.fetchone()
+                    
+                    if recent_join:
+                        # User joined too recently (possible spam)
+                        logger.warning(f"Rapid rejoin detected: {member.name}")
+                        log_security_event(inviter_id, 'rapid_rejoin',
+                                         f'User {member.name} joined within 1 hour of previous join',
+                                         'high')
+                        update_trust_score(inviter_id, -10, 'Rapid rejoin spam')
+                        await notify_admins_security(
+                            "Rapid Rejoin Detected",
+                            f"<@{inviter_id}> invited {member.mention} who joined within 1 hour",
+                            inviter_id
+                        )
+                        conn.close()
+                        break
+                    
+                    # ANTI-EXPLOIT: Prevent self-inviting
+                    if inviter_id == invited_id:
+                        logger.warning(f"Self-invite attempt: {member.name}")
+                        log_security_event(inviter_id, 'self_invite',
+                                         'Attempted to invite themselves',
+                                         'high')
+                        update_trust_score(inviter_id, -20, 'Self-invite attempt')
+                        await notify_admins_security(
+                            "Self-Invite Attempt",
+                            f"<@{inviter_id}> attempted to invite themselves",
+                            inviter_id
+                        )
+                        conn.close()
+                        break
+                    
+                    coins_per_invite = int(get_setting('coins_per_invite', 50))
+                    
+                    # Award coins to inviter
+                    def award_invite_coins():
+                        return add_coins(inviter_id, coins_per_invite, 'invite', 
+                                       f'Invited {member.name}')
+                    
+                    new_balance = await run_in_executor(award_invite_coins)
+                    
+                    # Update invite count
+                    cur.execute('UPDATE user_coins SET invite_count = invite_count + 1 WHERE user_id = ?', 
+                               (inviter_id,))
+                    
+                    # Log invite with timestamp
+                    cur.execute('''INSERT INTO invites (inviter_id, invited_id, joined_at, coins_earned)
+                                   VALUES (?, ?, ?, ?)''',
+                               (inviter_id, invited_id, datetime.now().isoformat(), coins_per_invite))
+                    conn.commit()
+                    conn.close()
+                    
+                    # Notify inviter
+                    try:
+                        inviter = await bot.fetch_user(int(inviter_id))
+                        embed = create_success_embed("ð Invite Reward!", 
+                            f"You earned **{coins_per_invite} coins** for inviting {member.mention}!\n"
+                            f"New balance: **{new_balance:,} coins**")
+                        await inviter.send(embed=embed)
+                    except:
+                        pass
+                    
+                    logger.info(f"Invite reward: {inviter_id} earned {coins_per_invite} coins for inviting {member.name}")
+                    break
+        
+        # Update cache
+        bot.cached_invites[member.guild.id] = {inv.code: inv.uses for inv in invites_after}
+        
+    except Exception as e:
+        logger.error(f"Error tracking invite: {e}")
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    """Track voice activity for coin rewards"""
+    user_id = str(member.id)
+    
+    # User joined voice
+    if before.channel is None and after.channel is not None:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute('''INSERT INTO voice_sessions (user_id, started_at)
+                       VALUES (?, ?)''', (user_id, datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+    
+    # User left voice
+    elif before.channel is not None and after.channel is None:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Find active session
+        cur.execute('''SELECT id, started_at FROM voice_sessions 
+                       WHERE user_id = ? AND ended_at IS NULL 
+                       ORDER BY started_at DESC LIMIT 1''', (user_id,))
+        row = cur.fetchone()
+        
+        if row:
+            session_id, started_at = row
+            started = datetime.fromisoformat(started_at)
+            duration = (datetime.now() - started).total_seconds() / 60  # minutes
+            
+            min_duration = int(get_setting('voice_min_duration_minutes', 5))
+            coins_per_minute = int(get_setting('coins_per_voice_minute', 2))
+            
+            # Award coins if minimum duration met
+            if duration >= min_duration:
+                coins_earned = int(duration * coins_per_minute)
+                new_balance = add_coins(user_id, coins_earned, 'voice', 
+                                      f'Voice activity: {int(duration)} minutes')
+                
+                # Update session
+                cur.execute('''UPDATE voice_sessions 
+                               SET ended_at = ?, duration_minutes = ?, coins_earned = ?
+                               WHERE id = ?''',
+                           (datetime.now().isoformat(), int(duration), coins_earned, session_id))
+                
+                # Update user stats
+                cur.execute('UPDATE user_coins SET voice_minutes = voice_minutes + ? WHERE user_id = ?',
+                           (int(duration), user_id))
+                
+                conn.commit()
+                
+                # Notify user
+                try:
+                    embed = create_success_embed("ð¤ Voice Reward!", 
+                        f"You earned **{coins_earned} coins** for {int(duration)} minutes in voice!\n"
+                        f"New balance: **{new_balance} coins**")
+                    await member.send(embed=embed)
+                except:
+                    pass
+            else:
+                # Just close session without reward
+                cur.execute('''UPDATE voice_sessions 
+                               SET ended_at = ?, duration_minutes = ?
+                               WHERE id = ?''',
+                           (datetime.now().isoformat(), int(duration), session_id))
+                conn.commit()
+        
+        conn.close()
+
+# Initialize invite cache
+bot.cached_invites = {}
+
+@bot.event
+async def on_guild_join(guild):
+    """Cache invites when bot joins a guild"""
+    try:
+        invites = await guild.invites()
+        bot.cached_invites[guild.id] = {inv.code: inv.uses for inv in invites}
+    except:
+        pass
+
+# Expiration checker background task
+async def expiration_checker_loop():
+    """Background task to check for expired VPS and send warnings"""
+    await bot.wait_until_ready()
+    
+    # Track which VPS have been warned at each interval
+    warned_24h = set()
+    warned_12h = set()
+    warned_1h = set()
+    
+    while not bot.is_closed():
+        try:
+            # Check for expired VPS
+            suspended_count = check_and_suspend_expired_vps()
+            if suspended_count > 0:
+                logger.info(f"Auto-suspended {suspended_count} expired VPS")
+            
+            # Get all VPS with expiration dates
+            conn = get_db()
+            cur = conn.cursor()
+            cur.execute('''SELECT id, user_id, container_name, expires_at, whitelisted
+                           FROM vps 
+                           WHERE expires_at IS NOT NULL 
+                           AND suspended = 0
+                           AND whitelisted = 0''')
+            all_vps = cur.fetchall()
+            conn.close()
+            
+            for vps in all_vps:
+                vps_id, user_id, container_name, expires_at_str, whitelisted = vps
+                
+                if not expires_at_str or whitelisted:
+                    continue
+                
+                expires_at = datetime.fromisoformat(expires_at_str)
+                hours_left = (expires_at - datetime.now()).total_seconds() / 3600
+                
+                if hours_left <= 0:
+                    continue
+                
+                try:
+                    user = await bot.fetch_user(int(user_id))
+                    renewal_cost_1day = int(get_setting('coins_vps_renewal_1day', 50))
+                    renewal_cost_7days = int(get_setting('coins_vps_renewal_7days', 300))
+                    
+                    # 24 hour warning
+                    if 23 <= hours_left <= 25 and vps_id not in warned_24h:
+                        embed = create_warning_embed("â ï¸ VPS Expiring in 24 Hours!", 
+                            f"Your VPS `{container_name}` will expire in **24 hours**!\n\n"
+                            f"**Expires:** {expires_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                            f"**VPS ID:** {vps_id}\n\n"
+                            f"**Renewal Options:**\n"
+                            f"â¢ 1 Day: {renewal_cost_1day} coins\n"
+                            f"â¢ 7 Days: {renewal_cost_7days} coins\n\n"
+                            f"**Renew Now:** `{PREFIX}renew {vps_id} <days>`\n"
+                            f"**Check Balance:** `{PREFIX}balance`")
+                        embed.set_footer(text=f"{BOT_NAME} â¢ VPS Expiration Warning")
+                        await user.send(embed=embed)
+                        warned_24h.add(vps_id)
+                        logger.info(f"Sent 24h warning to user {user_id} for VPS {container_name}")
+                    
+                    # 12 hour warning
+                    elif 11 <= hours_left <= 13 and vps_id not in warned_12h:
+                        embed = create_warning_embed("ð¨ VPS Expiring in 12 Hours!", 
+                            f"**URGENT:** Your VPS `{container_name}` will expire in **12 hours**!\n\n"
+                            f"**Expires:** {expires_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                            f"**VPS ID:** {vps_id}\n\n"
+                            f"**Renewal Options:**\n"
+                            f"â¢ 1 Day: {renewal_cost_1day} coins\n"
+                            f"â¢ 7 Days: {renewal_cost_7days} coins\n\n"
+                            f"**Renew Now:** `{PREFIX}renew {vps_id} <days>`\n"
+                            f"**Earn Coins:** `{PREFIX}daily`, `{PREFIX}work`")
+                        embed.set_footer(text=f"{BOT_NAME} â¢ URGENT Expiration Warning")
+                        await user.send(embed=embed)
+                        warned_12h.add(vps_id)
+                        logger.info(f"Sent 12h warning to user {user_id} for VPS {container_name}")
+                    
+                    # 1 hour warning
+                    elif 0.5 <= hours_left <= 1.5 and vps_id not in warned_1h:
+                        embed = create_error_embed("â° VPS EXPIRING IN 1 HOUR!", 
+                            f"**CRITICAL:** Your VPS `{container_name}` will expire in **1 hour**!\n\n"
+                            f"**Expires:** {expires_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                            f"**VPS ID:** {vps_id}\n\n"
+                            f"**After expiration, your VPS will be SUSPENDED!**\n\n"
+                            f"**Quick Renewal:**\n"
+                            f"â¢ 1 Day: {renewal_cost_1day} coins â `{PREFIX}renew {vps_id} 1`\n"
+                            f"â¢ 7 Days: {renewal_cost_7days} coins â `{PREFIX}renew {vps_id} 7`\n\n"
+                            f"**Check Balance:** `{PREFIX}balance`")
+                        embed.set_footer(text=f"{BOT_NAME} â¢ CRITICAL Expiration Warning")
+                        await user.send(embed=embed)
+                        warned_1h.add(vps_id)
+                        logger.info(f"Sent 1h warning to user {user_id} for VPS {container_name}")
+                
+                except discord.Forbidden:
+                    logger.warning(f"Cannot DM user {user_id} - DMs disabled")
+                except Exception as e:
+                    logger.error(f"Failed to send expiration warning to user {user_id}: {e}")
+            
+            # Clean up warning sets for renewed VPS
+            # Remove VPS IDs that no longer exist or have been renewed
+            current_vps_ids = {vps[0] for vps in all_vps}
+            warned_24h = warned_24h & current_vps_ids
+            warned_12h = warned_12h & current_vps_ids
+            warned_1h = warned_1h & current_vps_ids
+            
+        except Exception as e:
+            logger.error(f"Error in expiration checker: {e}")
+        
+        # Check every 10 minutes for more accurate warnings
+        await asyncio.sleep(600)
 
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         return
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(embed=create_error_embed("Missing Argument", f"Please check command usage with `{PREFIX}help`."))
+        await ctx.send(embed=create_error_embed("Missing Argument", "Please check command usage with `!help`."))
     elif isinstance(error, commands.BadArgument):
         await ctx.send(embed=create_error_embed("Invalid Argument", "Please check your input and try again."))
     elif isinstance(error, commands.CheckFailure):
@@ -1421,38 +2948,253 @@ async def on_command_error(ctx, error):
         logger.error(f"Command error: {error}")
         await ctx.send(embed=create_error_embed("System Error", "An unexpected error occurred. Support has been notified."))
 
+# ============================================
+# SECURITY HELPER FUNCTIONS
+# ============================================
+
+def check_rate_limit(user_id: str, action_type: str, max_actions: int, window_minutes: int) -> Tuple[bool, int]:
+    """
+    Check if user has exceeded rate limit for an action
+    Returns: (is_allowed, remaining_seconds)
+    """
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        now = datetime.now()
+        
+        # Get existing rate limit record
+        cur.execute('''SELECT * FROM rate_limits 
+                       WHERE user_id = ? AND action_type = ?''',
+                   (user_id, action_type))
+        record = cur.fetchone()
+        
+        if not record:
+            # First time - create record
+            cur.execute('''INSERT INTO rate_limits 
+                           (user_id, action_type, action_count, window_start, last_action)
+                           VALUES (?, ?, 1, ?, ?)''',
+                       (user_id, action_type, now.isoformat(), now.isoformat()))
+            conn.commit()
+            conn.close()
+            return True, 0
+        
+        record = dict(record)
+        window_start = datetime.fromisoformat(record['window_start'])
+        window_elapsed = (now - window_start).total_seconds() / 60  # minutes
+        
+        # Check if window has expired
+        if window_elapsed >= window_minutes:
+            # Reset window
+            cur.execute('''UPDATE rate_limits 
+                           SET action_count = 1, window_start = ?, last_action = ?
+                           WHERE user_id = ? AND action_type = ?''',
+                       (now.isoformat(), now.isoformat(), user_id, action_type))
+            conn.commit()
+            conn.close()
+            return True, 0
+        
+        # Check if limit exceeded
+        if record['action_count'] >= max_actions:
+            remaining_seconds = int((window_minutes * 60) - (window_elapsed * 60))
+            conn.close()
+            return False, remaining_seconds
+        
+        # Increment counter
+        cur.execute('''UPDATE rate_limits 
+                       SET action_count = action_count + 1, last_action = ?
+                       WHERE user_id = ? AND action_type = ?''',
+                   (now.isoformat(), user_id, action_type))
+        conn.commit()
+        conn.close()
+        return True, 0
+        
+    except Exception as e:
+        logger.error(f"Rate limit check error: {e}")
+        return True, 0  # Allow on error to not block legitimate users
+
+def log_security_event(user_id: str, activity_type: str, description: str, 
+                       severity: str = 'low', additional_data: str = None):
+    """Log suspicious activity for security monitoring"""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        cur.execute('''INSERT INTO security_logs 
+                       (user_id, activity_type, description, severity, created_at, additional_data)
+                       VALUES (?, ?, ?, ?, ?, ?)''',
+                   (user_id, activity_type, description, severity, 
+                    datetime.now().isoformat(), additional_data))
+        
+        # Auto-flag high severity events
+        if severity in ['high', 'critical']:
+            cur.execute('''UPDATE security_logs SET flagged = 1 
+                           WHERE user_id = ? AND activity_type = ? 
+                           ORDER BY created_at DESC LIMIT 1''',
+                       (user_id, activity_type))
+        
+        conn.commit()
+        conn.close()
+        
+        # Log to file for admin review
+        logger.warning(f"SECURITY [{severity.upper()}]: User {user_id} - {activity_type}: {description}")
+        
+    except Exception as e:
+        logger.error(f"Failed to log security event: {e}")
+
+def update_trust_score(user_id: str, change: int, reason: str = None):
+    """Update user's trust score (0-100)"""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Ensure user exists in trust table
+        cur.execute('''INSERT OR IGNORE INTO user_trust 
+                       (user_id, trust_score, warnings, violations)
+                       VALUES (?, 100, 0, 0)''', (user_id,))
+        
+        # Update score
+        cur.execute('''UPDATE user_trust 
+                       SET trust_score = MAX(0, MIN(100, trust_score + ?))
+                       WHERE user_id = ?''', (change, user_id))
+        
+        # If negative change, increment violations
+        if change < 0:
+            cur.execute('''UPDATE user_trust 
+                           SET violations = violations + 1,
+                               last_violation = ?,
+                               notes = COALESCE(notes || '\n', '') || ?
+                           WHERE user_id = ?''',
+                       (datetime.now().isoformat(), 
+                        f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] {reason or 'Violation'}",
+                        user_id))
+        
+        # Get updated score
+        cur.execute('SELECT trust_score FROM user_trust WHERE user_id = ?', (user_id,))
+        new_score = cur.fetchone()['trust_score']
+        
+        # Auto-restrict if score too low
+        if new_score < 20:
+            cur.execute('UPDATE user_trust SET restricted = 1 WHERE user_id = ?', (user_id,))
+            log_security_event(user_id, 'auto_restriction', 
+                             f'User auto-restricted due to low trust score ({new_score})',
+                             'high')
+        
+        conn.commit()
+        conn.close()
+        
+        return new_score
+        
+    except Exception as e:
+        logger.error(f"Failed to update trust score: {e}")
+        return 100
+
+def is_user_restricted(user_id: str) -> bool:
+    """Check if user is restricted from earning coins"""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        cur.execute('SELECT restricted FROM user_trust WHERE user_id = ?', (user_id,))
+        result = cur.fetchone()
+        conn.close()
+        
+        return result['restricted'] == 1 if result else False
+        
+    except Exception as e:
+        logger.error(f"Failed to check restriction: {e}")
+        return False
+
+async def notify_admins_security(title: str, description: str, user_id: str = None):
+    """Notify admins of security events"""
+    try:
+        embed = create_error_embed(f"ð¨ Security Alert: {title}", description)
+        
+        if user_id:
+            add_field(embed, "User ID", f"<@{user_id}> ({user_id})", False)
+        
+        add_field(embed, "Timestamp", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), False)
+        
+        # Notify main admin
+        try:
+            admin = await bot.fetch_user(MAIN_ADMIN_ID)
+            await admin.send(embed=embed)
+        except:
+            pass
+        
+        # Notify other admins
+        for admin_id in admin_data.get("admins", []):
+            try:
+                admin = await bot.fetch_user(int(admin_id))
+                await admin.send(embed=embed)
+            except:
+                pass
+                
+    except Exception as e:
+        logger.error(f"Failed to notify admins: {e}")
+
+# ============================================
 # Bot commands
 @bot.command(name='ping')
 async def ping(ctx):
-    """Check bot latency"""
+    """Check bot latency and connection status"""
     latency = round(bot.latency * 1000)
-    embed = create_success_embed(
-        "🏓 Pong!",
-        f"Bot is responding perfectly!"
-    )
-    add_field(embed, "Latency", f"`{latency}ms`", inline=True)
-    add_field(embed, "Status", "✅ Online", inline=True)
-    add_field(embed, "Bot", f"`{BOT_NAME} v{BOT_VERSION}`", inline=True)
+    
+    # Determine latency quality
+    if latency < 100:
+        quality = "Excellent"
+        color = EmbedColors.SUCCESS
+        emoji = "ð¢"
+    elif latency < 200:
+        quality = "Good"
+        color = EmbedColors.INFO
+        emoji = "ð¡"
+    else:
+        quality = "Poor"
+        color = EmbedColors.WARNING
+        emoji = "ð´"
+    
+    embed = create_embed("Connection Status", color=color)
+    
+    # Main metrics
+    add_field(embed, "Latency", f"{emoji} **{latency}ms** ({quality})", True)
+    add_field(embed, "Status", format_status_badge(True, "Operational"), True)
+    add_field(embed, "Uptime", f"ð {get_uptime()}", True)
+    
     await ctx.send(embed=embed)
 
 @bot.command(name='uptime')
 async def uptime(ctx):
+    """Display system uptime information"""
     up = get_uptime()
-    embed = create_info_embed("Host Uptime", up)
+    
+    embed = create_info_embed("System Uptime", show_icon=False)
+    embed.set_thumbnail(url="https://i.imgur.com/dpatuSj.png")
+    
+    add_field(embed, "ð Host Uptime", f"```{up}```", False)
+    add_field(embed, "ð Status", "All systems operational", False)
+    
     await ctx.send(embed=embed)
 
 @bot.command(name='thresholds')
 @is_admin()
 async def thresholds(ctx):
-    embed = create_info_embed("Resource Thresholds", f"**CPU:** {CPU_THRESHOLD}%\n**RAM:** {RAM_THRESHOLD}%")
+    """View current resource monitoring thresholds"""
+    embed = create_card_embed("Resource Thresholds", "Current monitoring limits for auto-suspension")
+    
+    add_field(embed, "ð´ CPU Threshold", f"```{CPU_THRESHOLD}%```", True)
+    add_field(embed, "ðµ RAM Threshold", f"```{RAM_THRESHOLD}%```", True)
+    add_field(embed, "âï¸ Action", "Auto-suspend on exceed", True)
+    
     await ctx.send(embed=embed)
 
 @bot.command(name='set-threshold')
 @is_admin()
 async def set_threshold(ctx, cpu: int, ram: int):
+    """Set resource monitoring thresholds"""
     global CPU_THRESHOLD, RAM_THRESHOLD
     if cpu < 0 or ram < 0:
-        await ctx.send(embed=create_error_embed("Invalid Thresholds", "Thresholds must be non-negative."))
+        await ctx.send(embed=create_error_embed("Invalid Input", "Thresholds must be non-negative values."))
         return
     CPU_THRESHOLD = cpu
     RAM_THRESHOLD = ram
@@ -1477,31 +3219,127 @@ async def set_status(ctx, activity_type: str, *, name: str):
     embed = create_success_embed("Status Updated", f"Set to {activity_type}: {name}")
     await ctx.send(embed=embed)
 
+@bot.command(name='reload-env')
+@is_admin()
+async def reload_env(ctx):
+    """Reload .env configuration without restarting bot"""
+    try:
+        # Reload .env file
+        load_dotenv(override=True)
+        
+        # Reload all global variables
+        global BOT_NAME, PREFIX, BOT_VERSION, BOT_DEVELOPER, MAIN_ADMIN_ID
+        global YOUR_SERVER_IP, DEFAULT_STORAGE_POOL, CPU_THRESHOLD, RAM_THRESHOLD
+        global VPS_USER_ROLE_ID
+        
+        BOT_NAME = os.getenv('BOT_NAME', 'UnixNodes')
+        PREFIX = os.getenv('PREFIX', '!')
+        BOT_VERSION = os.getenv('BOT_VERSION', '7.1-PRO')
+        BOT_DEVELOPER = os.getenv('BOT_DEVELOPER', 'Developer')
+        MAIN_ADMIN_ID = int(os.getenv('MAIN_ADMIN_ID', '0'))
+        YOUR_SERVER_IP = os.getenv('YOUR_SERVER_IP', '127.0.0.1')
+        DEFAULT_STORAGE_POOL = os.getenv('DEFAULT_STORAGE_POOL', 'default')
+        CPU_THRESHOLD = int(os.getenv('CPU_THRESHOLD', '90'))
+        RAM_THRESHOLD = int(os.getenv('RAM_THRESHOLD', '90'))
+        VPS_USER_ROLE_ID = int(os.getenv('VPS_USER_ROLE_ID', '0'))
+        
+        # Update settings in database
+        set_setting('cpu_threshold', str(CPU_THRESHOLD))
+        set_setting('ram_threshold', str(RAM_THRESHOLD))
+        
+        embed = create_success_embed("â Configuration Reloaded", 
+            f"Successfully reloaded .env configuration!\n\n"
+            f"**Bot Name:** {BOT_NAME}\n"
+            f"**Prefix:** {PREFIX}\n"
+            f"**Version:** {BOT_VERSION}\n"
+            f"**Server IP:** {YOUR_SERVER_IP}\n"
+            f"**CPU Threshold:** {CPU_THRESHOLD}%\n"
+            f"**RAM Threshold:** {RAM_THRESHOLD}%")
+        embed.set_footer(text="Changes applied without restart!")
+        await ctx.send(embed=embed)
+        
+        logger.info(f"Configuration reloaded by {ctx.author.name}")
+        
+    except Exception as e:
+        await ctx.send(embed=create_error_embed("Reload Failed", f"Error reloading configuration: {str(e)}"))
+        logger.error(f"Failed to reload .env: {e}")
+
+@bot.command(name='cleanup-shop', aliases=['remove-upgrades', 'clean-shop'])
+@is_admin()
+async def cleanup_shop(ctx):
+    """Remove VPS upgrade and extension items from shop database"""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+
+        # Delete VPS upgrade items by type
+        cur.execute("DELETE FROM shop_items WHERE item_type = 'vps_upgrade'")
+        deleted_upgrades = cur.rowcount
+        
+        # Delete VPS extension items by type
+        cur.execute("DELETE FROM shop_items WHERE item_type = 'vps_extension'")
+        deleted_extensions = cur.rowcount
+        
+        # Delete VPS upgrade/extension items by name pattern
+        cur.execute("""DELETE FROM shop_items WHERE 
+                       name LIKE '%VPS%Upgrade%' OR 
+                       name LIKE '%RAM Upgrade%' OR 
+                       name LIKE '%CPU Upgrade%' OR 
+                       name LIKE '%Disk Upgrade%' OR
+                       name LIKE '%VPS Extension%' OR
+                       name LIKE '%Extend VPS%'""")
+        deleted_by_name = cur.rowcount
+        
+        conn.commit()
+        conn.close()
+
+        total_deleted = deleted_upgrades + deleted_extensions + deleted_by_name
+        
+        if total_deleted > 0:
+            embed = create_success_embed("â Shop Cleaned Up",
+                f"Removed **{total_deleted}** VPS-related item(s) from the shop.\n\n"
+                f"**VPS Upgrades:** {deleted_upgrades}\n"
+                f"**VPS Extensions:** {deleted_extensions}\n"
+                f"**By Name Pattern:** {deleted_by_name}\n\n"
+                f"VPS upgrades and extensions are no longer available.\n"
+                f"Users should use `{PREFIX}renew` command instead.")
+            logger.info(f"Removed {total_deleted} VPS items from shop (upgrades: {deleted_upgrades}, extensions: {deleted_extensions})")
+        else:
+            embed = create_info_embed("â Shop Already Clean",
+                "No VPS upgrade or extension items found in the shop.\n\n"
+                f"The shop is clean! Users can use `{PREFIX}renew` for renewals.")
+
+        await ctx.send(embed=embed)
+
+    except Exception as e:
+        await ctx.send(embed=create_error_embed("Cleanup Failed", f"Error: {str(e)}"))
+        logger.error(f"Failed to cleanup shop: {e}")
+
 @bot.command(name="myvps")
 async def my_vps(ctx):
     user_id = str(ctx.author.id)
     vps_list = vps_data.get(user_id, [])
 
-    # ─── No VPS Case ───────────────────────────────────────────
+    # âââ No VPS Case âââââââââââââââââââââââââââââââââââââââââââ
     if not vps_list:
         embed = create_error_embed(
-            "❌ No VPS Found",
-            f"You don’t have any **{BOT_NAME} VPS** yet."
+            "â No VPS Found",
+            f"You donât have any **{BOT_NAME} VPS** yet."
         )
         embed.add_field(
-            name="🚀 Quick Actions",
+            name="ð Quick Actions",
             value=(
-                f"• `{PREFIX}manage` – Manage VPS\n"
-                f"• Contact an admin to request a VPS"
+                f"â¢ `{PREFIX}manage` â Manage VPS\n"
+                f"â¢ Contact an admin to request a VPS"
             ),
             inline=False
         )
         await ctx.send(embed=embed)
         return
 
-    # ─── Embed ────────────────────────────────────────────────
+    # âââ Embed ââââââââââââââââââââââââââââââââââââââââââââââââ
     embed = create_info_embed(
-        title="🖥️ My VPS Dashboard",
+        title="ð¥ï¸ My VPS Dashboard",
         description="Your personal VPS overview"
     )
 
@@ -1509,7 +3347,7 @@ async def my_vps(ctx):
     running = suspended = whitelisted = 0
     vps_cards = []
 
-    # ─── VPS Processing ───────────────────────────────────────
+    # âââ VPS Processing âââââââââââââââââââââââââââââââââââââââ
     for i, vps in enumerate(vps_list, start=1):
         node = get_node(vps.get("node_id"))
         node_name = node["name"] if node else "Unknown"
@@ -1520,55 +3358,42 @@ async def my_vps(ctx):
         storage = vps.get("storage", "0GB")
 
         if vps.get("suspended"):
-            status = "⛔ SUSPENDED"
+            status = "â SUSPENDED"
             suspended += 1
         elif vps.get("status") == "running":
-            status = "🟢 RUNNING"
+            status = "ð¢ RUNNING"
             running += 1
         else:
-            status = "🔴 STOPPED"
+            status = "ð´ STOPPED"
 
         if vps.get("whitelisted"):
             whitelisted += 1
+        
+        # Get expiry info
+        expiry_info = format_expiry_time(vps.get('expires_at'))
 
-        # Build VPS card
-        card = (
+        vps_cards.append(
             f"**{i}.** `{vps['container_name']}`\n"
-            f"{status} • `{config}`\n"
-            f"⚙️ `{ram}` RAM • `{cpu}` CPU • `{storage}` Disk\n"
-            f"📍 Node: `{node_name}`"
+            f"{status} â¢ `{config}`\n"
+            f"âï¸ `{ram}` RAM â¢ `{cpu}` CPU â¢ `{storage}` Disk\n"
+            f"ð Node: `{node_name}`\n"
+            f"â° Expires: {expiry_info['text']}"
         )
-        
-        # Add expiration info if set
-        if vps.get('expiration_date'):
-            expiration_dt = datetime.fromisoformat(vps['expiration_date'])
-            days_remaining = (expiration_dt - datetime.now()).days
-            
-            if days_remaining < 0:
-                expiration_badge = "🔴 EXPIRED"
-            elif days_remaining <= EXPIRATION_WARNING_DAYS:
-                expiration_badge = "🟡 EXPIRING"
-            else:
-                expiration_badge = "🟢 ACTIVE"
-            
-            card += f"\n⏰ {expiration_badge} • Expires: `{expiration_dt.strftime('%Y-%m-%d')}`"
-        
-        vps_cards.append(card)
 
-    # ─── Row 1 : Summary ──────────────────────────────────────
+    # âââ Row 1 : Summary ââââââââââââââââââââââââââââââââââââââ
     embed.add_field(
-        name="📊 Summary",
+        name="ð Summary",
         value=(
-            f"🖥️ `{total_vps}` VPS\n"
-            f"🟢 `{running}` Running\n"
-            f"⛔ `{suspended}` Suspended\n"
-            f"✅ `{whitelisted}` Whitelisted"
+            f"ð¥ï¸ `{total_vps}` VPS\n"
+            f"ð¢ `{running}` Running\n"
+            f"â `{suspended}` Suspended\n"
+            f"â `{whitelisted}` Whitelisted"
         ),
         inline=True
     )
 
     embed.add_field(
-        name="⚡ Quick Actions",
+        name="â¡ Quick Actions",
         value=(
             f"`{PREFIX}manage`\n"
             f"`{PREFIX}reinstall`\n"
@@ -1578,21 +3403,21 @@ async def my_vps(ctx):
     )
 
     embed.add_field(
-        name="🧭 Tip",
+        name="ð§­ Tip",
         value="Use **manage** to control your VPS",
         inline=True
     )
 
-    # ─── VPS Cards (Full Width) ───────────────────────────────
+    # âââ VPS Cards (Full Width) âââââââââââââââââââââââââââââââ
     vps_text = "\n\n".join(vps_cards)
     for i in range(0, len(vps_text), 1024):
         embed.add_field(
-            name="🖥️ Your VPS",
+            name="ð¥ï¸ Your VPS",
             value=vps_text[i:i + 1024],
             inline=False
         )
 
-    embed.set_footer(text=f"Made by Hopingboyz • VPS Control Panel")
+    embed.set_footer(text=f"{BOT_NAME} â¢ VPS Control Panel")
     embed.timestamp = ctx.message.created_at
 
     await ctx.send(embed=embed)
@@ -1609,22 +3434,20 @@ async def lxc_list(ctx, node_id: int = 1):
         await ctx.send(embed=create_error_embed("Error", str(e)))
 
 class NodeSelectView(discord.ui.View):
-    def __init__(self, ram: int, cpu: int, disk: int, user: discord.Member, ctx, expiry_days: int = None):
+    def __init__(self, ram: int, cpu: int, disk: int, user: discord.Member, ctx, days: int = 7):
         super().__init__(timeout=300)
         self.ram = ram
         self.cpu = cpu
         self.disk = disk
         self.user = user
         self.ctx = ctx
-        self.expiry_days = expiry_days if expiry_days and expiry_days > 0 else DEFAULT_VPS_EXPIRATION_DAYS
+        self.days = days
         nodes = get_nodes()
         options = []
         for n in nodes:
-            # Show BOTH local and remote nodes for VPS creation (multi-node support)
             current_count = get_current_vps_count(n['id'])
             if current_count < n['total_vps']:
-                node_type = "📍 Local" if n['is_local'] else "🌐 Remote"
-                options.append(discord.SelectOption(label=f"{n['name']} {node_type}", value=str(n['id']), description=f"{n['location']} - Available: {n['total_vps'] - current_count}"))
+                options.append(discord.SelectOption(label=n['name'], value=str(n['id']), description=f"{n['location']} - Available: {n['total_vps'] - current_count}"))
         if not options:
             self.add_item(discord.ui.Select(placeholder="No available nodes", disabled=True))
         else:
@@ -1639,11 +3462,11 @@ class NodeSelectView(discord.ui.View):
         node_id = int(self.select.values[0])
         self.select.disabled = True
         await interaction.response.edit_message(view=self)
-        os_view = OSSelectView(self.ram, self.cpu, self.disk, self.user, self.ctx, node_id, self.expiry_days)
+        os_view = OSSelectView(self.ram, self.cpu, self.disk, self.user, self.ctx, node_id, self.days)
         await interaction.followup.send(embed=create_info_embed("Select OS", "Choose the OS for the VPS."), view=os_view)
 
 class OSSelectView(discord.ui.View):
-    def __init__(self, ram: int, cpu: int, disk: int, user: discord.Member, ctx, node_id: int, expiry_days: int = None):
+    def __init__(self, ram: int, cpu: int, disk: int, user: discord.Member, ctx, node_id: int, days: int = 7):
         super().__init__(timeout=300)
         self.ram = ram
         self.cpu = cpu
@@ -1651,7 +3474,7 @@ class OSSelectView(discord.ui.View):
         self.user = user
         self.ctx = ctx
         self.node_id = node_id
-        self.expiry_days = expiry_days if expiry_days and expiry_days > 0 else DEFAULT_VPS_EXPIRATION_DAYS
+        self.days = days
         self.select = discord.ui.Select(
             placeholder="Select an OS for the VPS",
             options=[discord.SelectOption(label=o["label"], value=o["value"]) for o in OS_OPTIONS]
@@ -1668,22 +3491,10 @@ class OSSelectView(discord.ui.View):
         creating_embed = create_info_embed("Creating VPS", f"Deploying {os_version} VPS for {self.user.mention} on node {self.node_id}...")
         await interaction.response.edit_message(embed=creating_embed, view=self)
         user_id = str(self.user.id)
-        # Create shorter container name with GLOBAL VPS ID
-        username = self.user.name.lower().replace(" ", "-")[:15]  # Limit to 15 chars
-        
-        # Get next global VPS ID from database (auto-increment)
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT MAX(id) FROM vps")
-        max_id = cur.fetchone()[0] or 0
-        global_vps_id = max_id + 1
-        conn.close()
-        
-        # New naming format: <sanitized-username>-vps-<global-id>
-        # Example: hopingboyz-vps-1, alexuser-vps-2, btw-infinite-vps-3
-        # Sanitize username: remove underscores, spaces, special chars
-        sanitized_username = sanitize_username_for_container(username)
-        container_name = f"{sanitized_username}-vps-{global_vps_id}"
+        if user_id not in vps_data:
+            vps_data[user_id] = []
+        vps_count = len(vps_data[user_id]) + 1
+        container_name = f"{BOT_NAME.lower()}-vps-{user_id}-{vps_count}"
         ram_mb = self.ram * 1024
         try:
             await execute_lxc(container_name, f"init {os_version} {container_name} -s {DEFAULT_STORAGE_POOL}", node_id=self.node_id)
@@ -1694,24 +3505,10 @@ class OSSelectView(discord.ui.View):
             await execute_lxc(container_name, f"start {container_name}", node_id=self.node_id)
             await apply_internal_permissions(container_name, self.node_id)
             await recreate_port_forwards(container_name)
-            
-            # Generate strong password
-            root_password = generate_strong_password()
-            
-            # Configure SSH and set password
-            success, result = await configure_ssh(container_name, self.node_id, root_password)
-            if not success:
-                logger.warning(f"SSH configuration partially failed: {result}")
-            
-            # Execute HOST_MOTD command if configured
-            if HOST_MOTD:
-                try:
-                    await execute_lxc(container_name, f"exec {container_name} -- bash -c \"{HOST_MOTD}\"", node_id=self.node_id)
-                    logger.info(f"HOST_MOTD executed on {container_name}")
-                except Exception as e:
-                    logger.warning(f"HOST_MOTD execution failed for {container_name}: {e}")
-            
             config_str = f"{self.ram}GB RAM / {self.cpu} CPU / {self.disk}GB Disk"
+            # Set expiration based on specified days
+            expires_at = datetime.now() + timedelta(days=self.days)
+            
             vps_info = {
                 "container_name": container_name,
                 "node_id": self.node_id,
@@ -1726,14 +3523,18 @@ class OSSelectView(discord.ui.View):
                 "suspension_history": [],
                 "created_at": datetime.now().isoformat(),
                 "shared_with": [],
-                "expiration_date": (datetime.now() + timedelta(days=self.expiry_days)).isoformat(),
-                "root_password": root_password,
-                "id": global_vps_id
+                "expires_at": expires_at.isoformat(),
+                "duration_days": self.days,
+                "auto_renew": 0,
+                "id": None
             }
-            if user_id not in vps_data:
-                vps_data[user_id] = []
             vps_data[user_id].append(vps_info)
-            save_vps_data_immediate()
+            save_vps_data()
+            
+            # Set expiration in database
+            if vps_info.get('id'):
+                set_vps_expiration(vps_info['id'], self.days)
+            
             if self.ctx.guild:
                 vps_role = await get_or_create_vps_role(self.ctx.guild)
                 if vps_role:
@@ -1741,79 +3542,27 @@ class OSSelectView(discord.ui.View):
                         await self.user.add_roles(vps_role, reason=f"{BOT_NAME} VPS ownership granted")
                     except discord.Forbidden:
                         logger.warning(f"Failed to assign VPS role to {self.user.name}")
+            
+            renewal_cost = int(get_setting('coins_vps_renewal_1day', 50))
+            
             success_embed = create_success_embed("VPS Created Successfully")
             add_field(success_embed, "Owner", self.user.mention, True)
-            add_field(success_embed, "VPS ID", f"#{global_vps_id}", True)
+            add_field(success_embed, "VPS ID", f"#{vps_count}", True)
             add_field(success_embed, "Container", f"`{container_name}`", True)
             add_field(success_embed, "Node", get_node(self.node_id)['name'], True)
             add_field(success_embed, "Resources", f"**RAM:** {self.ram}GB\n**CPU:** {self.cpu} Cores\n**Storage:** {self.disk}GB", False)
             add_field(success_embed, "OS", os_version, True)
-            add_field(success_embed, "SSH Configuration", "✅ Configured (PasswordAuth enabled)", True)
-            add_field(success_embed, "SSH & Password", "✅ SSH configured for password authentication\n🔐 Root password generated and sent via DM\n📧 Check your DMs for SSH credentials!", False)
+            add_field(success_embed, "â° Expiration", 
+                f"**Expires:** {expires_at.strftime('%Y-%m-%d %H:%M')}\n"
+                f"**Duration:** {self.days} days\n"
+                f"**Renewal:** {renewal_cost} coins/day", True)
             add_field(success_embed, "Features", "Nesting, Privileged, FUSE, Kernel Modules (Docker Ready), Unprivileged Ports from 0", False)
             add_field(success_embed, "Disk Note", "Run `sudo resize2fs /` inside VPS if needed to expand filesystem.", False)
             await interaction.followup.send(embed=success_embed)
-            dm_embed = create_success_embed("🎉 VPS Created Successfully!", f"Your new VPS is ready to use!")
-            
-            # VPS Details Section
-            vps_details = f"""
-**VPS ID:** #{global_vps_id}
-**Container:** `{container_name}`
-**Configuration:** {config_str}
-**Operating System:** {os_version}
-**Status:** 🟢 Running
-**Created:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-**Expiration:** {(datetime.now() + timedelta(days=self.expiry_days)).strftime('%Y-%m-%d %H:%M:%S')} ({self.expiry_days} days)
-"""
-            add_field(dm_embed, "📊 VPS Details", vps_details.strip(), False)
-            
-            # Get all network interfaces - with timeout to prevent hanging
-            try:
-                networks = await asyncio.wait_for(
-                    get_container_networks(container_name, self.node_id),
-                    timeout=3.0
-                )
-            except asyncio.TimeoutError:
-                logger.warning(f"Timeout getting networks for {container_name}")
-                networks = {}
-            
-            if networks:
-                # Format SSH access info with all real interfaces
-                ssh_access_info = "**🖥️ Available Connection Points:**\n"
-                for interface, ip in sorted(networks.items()):
-                    ssh_access_info += f"└─ **{interface}:** `ssh root@{ip}`\n"
-                ssh_access_info += f"\n**🔑 Login Credentials:**\n"
-                ssh_access_info += f"**Username:** `root`\n"
-                ssh_access_info += f"**Password:** `{root_password}`\n"
-                ssh_access_info += f"\n**⚠️ Important:** Save this password securely!"
-            else:
-                # If no interfaces found, still show credentials (important!)
-                ssh_access_info = "**🔑 Login Credentials:**\n"
-                ssh_access_info += f"**Username:** `root`\n"
-                ssh_access_info += f"**Password:** `{root_password}`\n"
-                ssh_access_info += f"\n**📡 Network Setup:**\n"
-                ssh_access_info += "Your VPS is initializing its network interfaces.\n"
-                ssh_access_info += "They will be available in a few seconds.\n"
-                ssh_access_info += f"\n**⚠️ Important:** Save this password securely!"
-            
-            add_field(dm_embed, "🔐 SSH Credentials & Access", ssh_access_info, False)
-            
-            # SSH Features
-            features_info = """✅ **SSH:** Password authentication enabled
-✅ **SFTP:** File transfer available
-✅ **Root:** Full root access granted
-✅ **Ports:** All ports available for forwarding
-✅ **Docker:** Nesting, privileged mode, FUSE enabled
-✅ **Features:** Complete Linux container with full capabilities"""
-            add_field(dm_embed, "⚙️ Features & Capabilities", features_info, False)
-            
-            # Support Section
-            support_info = f"""**Need Help?**
-• Use `{PREFIX}manage` to start/stop/reinstall your VPS
-• Click 🔐 in manage to regenerate password
-• Contact admin for issues or upgrades
-• Check logs with: `journalctl -xe`"""
-            add_field(dm_embed, "📞 Support & Management", support_info, False)
+            dm_embed = create_success_embed("VPS Created!", f"Your VPS has been successfully deployed by an admin!")
+            add_field(dm_embed, "VPS Details", f"**VPS ID:** #{vps_count}\n**Container Name:** `{container_name}`\n**Configuration:** {config_str}\n**Status:** Running\n**OS:** {os_version}\n**Created:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", False)
+            add_field(dm_embed, "Management", f"â¢ Use `{PREFIX}manage` to start/stop/reinstall your VPS\nâ¢ Use `{PREFIX}manage` â SSH for terminal access\nâ¢ Contact admin for upgrades or issues", False)
+            add_field(dm_embed, "Important Notes", "â¢ Full root access via SSH\nâ¢ Docker-ready with nesting and privileged mode\nâ¢ Back up your data regularly", False)
             try:
                 await self.user.send(embed=dm_embed)
             except discord.Forbidden:
@@ -1824,20 +3573,506 @@ class OSSelectView(discord.ui.View):
 
 @bot.command(name='create')
 @is_admin()
-async def create_vps(ctx, ram: int, cpu: int, disk: int, user: discord.Member, expiry_days: int = None):
+async def create_vps(ctx, ram: int, cpu: int, disk: int, user: discord.Member, days: int = None):
+    """Create a VPS with optional expiry days"""
     if ram <= 0 or cpu <= 0 or disk <= 0:
         await ctx.send(embed=create_error_embed("Invalid Specs", "RAM, CPU, and Disk must be positive integers."))
         return
     
-    # Validate expiry_days if provided
-    if expiry_days is not None and expiry_days <= 0:
-        await ctx.send(embed=create_error_embed("Invalid Expiry Days", "Expiry days must be a positive integer."))
+    # Use default days if not specified
+    if days is None:
+        days = int(get_setting('default_vps_duration_days', 7))
+    elif days < 1 or days > 365:
+        await ctx.send(embed=create_error_embed("Invalid Duration", "Days must be between 1 and 365"))
         return
     
-    expiry_text = f" with {expiry_days} days expiry" if expiry_days else f" with {DEFAULT_VPS_EXPIRATION_DAYS} days expiry (default)"
-    embed = create_info_embed("VPS Creation", f"Creating VPS for {user.mention} with {ram}GB RAM, {cpu} CPU cores, {disk}GB Disk{expiry_text}.\nSelect node below.")
-    view = NodeSelectView(ram, cpu, disk, user, ctx, expiry_days)
+    embed = create_info_embed("VPS Creation", 
+        f"Creating VPS for {user.mention}\n"
+        f"**Specs:** {ram}GB RAM, {cpu} CPU cores, {disk}GB Disk\n"
+        f"**Duration:** {days} days\n"
+        f"Select node below.")
+    view = NodeSelectView(ram, cpu, disk, user, ctx, days)
     await ctx.send(embed=embed, view=view)
+
+@bot.command(name='deploy', aliases=['deploy-vps', 'create-vps', 'buy-vps'])
+async def deploy_vps(ctx, plan_id: int = None):
+    """Deploy your own VPS using coins - Use !deploy-plans to see available plans"""
+    user_id = str(ctx.author.id)
+    
+    # Check if user already has a VPS
+    vps_list = vps_data.get(user_id, [])
+    if len(vps_list) >= 1:
+        await ctx.send(embed=create_error_embed("â VPS Limit Reached", 
+            f"You already have **{len(vps_list)} VPS**!\n\n"
+            f"**Limit:** 1 VPS per user\n"
+            f"**Your VPS:** `{vps_list[0]['container_name']}`\n\n"
+            f"Use `{PREFIX}manage` to control your existing VPS.\n"
+            f"Contact an admin if you need additional VPS."))
+        return
+    
+    # If no plan specified, show plans
+    if plan_id is None:
+        await ctx.send(embed=create_info_embed("ð Select a Plan", 
+            f"Please specify a deployment plan!\n\n"
+            f"**View Plans:** `{PREFIX}deploy-plans`\n"
+            f"**Deploy:** `{PREFIX}deploy <plan_id>`\n\n"
+            f"**Example:** `{PREFIX}deploy 2` (Basic plan)"))
+        return
+    
+    # Get deployment plan
+    plan = get_deploy_plan(plan_id)
+    if not plan or not plan['active']:
+        await ctx.send(embed=create_error_embed("Invalid Plan", 
+            f"Plan #{plan_id} not found or inactive.\n\n"
+            f"Use `{PREFIX}deploy-plans` to see available plans."))
+        return
+    
+    # VPS specifications from plan
+    ram = plan['ram_gb']
+    cpu = plan['cpu_cores']
+    disk = plan['disk_gb']
+    cost = plan['cost_coins']
+    default_days = plan['duration_days']
+    
+    # Check user's coin balance
+    def check_balance():
+        coins_data = get_user_coins(user_id)
+        return coins_data['balance'], coins_data
+    
+    balance, coins_data = await run_in_executor(check_balance)
+    
+    if balance < cost:
+        needed = cost - balance
+        await ctx.send(embed=create_error_embed("ð° Insufficient Coins", 
+            f"You need **{cost:,} coins** to deploy a VPS.\n\n"
+            f"**Your Balance:** {balance:,} coins\n"
+            f"**You Need:** {needed:,} more coins\n\n"
+            f"**Earn Coins:**\n"
+            f"â¢ `{PREFIX}daily` - Daily reward\n"
+            f"â¢ `{PREFIX}work` - Work for coins\n"
+            f"â¢ `{PREFIX}coinhelp` - More ways to earn"))
+        return
+    
+    # Show deployment confirmation
+    embed = create_info_embed("ð Deploy Your VPS", 
+        f"You're about to deploy your own VPS!\n\n"
+        f"**Plan:** {plan['icon']} {plan['name']}\n"
+        f"**Specifications:**\n"
+        f"â¢ **RAM:** {ram}GB\n"
+        f"â¢ **CPU:** {cpu} Core{'s' if cpu > 1 else ''}\n"
+        f"â¢ **Disk:** {disk}GB\n"
+        f"â¢ **Duration:** {default_days} day{'s' if default_days > 1 else ''}\n\n"
+        f"**Cost:** {cost:,} coins\n"
+        f"**Your Balance:** {balance:,} coins\n"
+        f"**After Purchase:** {balance - cost:,} coins\n\n"
+        f"**Features:**\n"
+        f"â¢ Full root access\n"
+        f"â¢ Docker ready\n"
+        f"â¢ SSH access\n"
+        f"â¢ Port forwarding\n\n"
+        f"React with â to confirm or â to cancel")
+    
+    msg = await ctx.send(embed=embed)
+    await msg.add_reaction("â")
+    await msg.add_reaction("â")
+    
+    def check(reaction, user):
+        return user == ctx.author and str(reaction.emoji) in ["â", "â"] and reaction.message.id == msg.id
+    
+    try:
+        reaction, user = await bot.wait_for('reaction_add', timeout=60.0, check=check)
+        
+        if str(reaction.emoji) == "â":
+            await msg.edit(embed=create_info_embed("â Cancelled", "VPS deployment cancelled."))
+            return
+        
+        # Process payment
+        def process_payment():
+            success, new_balance = remove_coins(user_id, cost, 'vps_purchase', 
+                                               f'Deployed VPS ({ram}GB RAM, {cpu} CPU, {disk}GB Disk)')
+            return success, new_balance
+        
+        success, new_balance = await run_in_executor(process_payment)
+        
+        if not success:
+            await msg.edit(embed=create_error_embed("â Payment Failed", 
+                "Failed to process payment. Please try again."))
+            return
+        
+        # Update message to show deployment in progress
+        await msg.edit(embed=create_info_embed("â³ Deploying VPS", 
+            "Your VPS is being deployed... This may take a moment."))
+        
+        # Select node with available capacity
+        nodes = get_nodes()
+        selected_node = None
+        for node in nodes:
+            current_count = get_current_vps_count(node['id'])
+            if current_count < node['total_vps']:
+                selected_node = node
+                break
+        
+        if not selected_node:
+            # Refund coins
+            add_coins(user_id, cost, 'refund', 'VPS deployment failed - no available nodes')
+            await msg.edit(embed=create_error_embed("â Deployment Failed", 
+                "No available nodes. Your coins have been refunded.\n"
+                "Please contact an admin."))
+            return
+        
+        node_id = selected_node['id']
+        
+        # Create VPS
+        vps_count = 1
+        container_name = f"{BOT_NAME.lower()}-vps-{user_id}-{vps_count}"
+        ram_mb = ram * 1024
+        os_version = "ubuntu:22.04"  # Default OS
+        
+        try:
+            # Initialize container
+            await execute_lxc(container_name, f"init {os_version} {container_name} -s {DEFAULT_STORAGE_POOL}", node_id=node_id)
+            await execute_lxc(container_name, f"config set {container_name} limits.memory {ram_mb}MB", node_id=node_id)
+            await execute_lxc(container_name, f"config set {container_name} limits.cpu {cpu}", node_id=node_id)
+            await execute_lxc(container_name, f"config device set {container_name} root size={disk}GB", node_id=node_id)
+            await apply_lxc_config(container_name, node_id)
+            await execute_lxc(container_name, f"start {container_name}", node_id=node_id)
+            await apply_internal_permissions(container_name, node_id)
+            await recreate_port_forwards(container_name)
+            
+            config_str = f"{ram}GB RAM / {cpu} CPU / {disk}GB Disk"
+            expires_at = datetime.now() + timedelta(days=default_days)
+            
+            vps_info = {
+                "container_name": container_name,
+                "node_id": node_id,
+                "ram": f"{ram}GB",
+                "cpu": str(cpu),
+                "storage": f"{disk}GB",
+                "config": config_str,
+                "os_version": os_version,
+                "status": "running",
+                "suspended": False,
+                "whitelisted": False,
+                "suspension_history": [],
+                "created_at": datetime.now().isoformat(),
+                "shared_with": [],
+                "expires_at": expires_at.isoformat(),
+                "duration_days": default_days,
+                "auto_renew": 0,
+                "id": None
+            }
+            
+            if user_id not in vps_data:
+                vps_data[user_id] = []
+            vps_data[user_id].append(vps_info)
+            save_vps_data()
+            
+            # Assign VPS role
+            if ctx.guild:
+                vps_role = await get_or_create_vps_role(ctx.guild)
+                if vps_role:
+                    try:
+                        await ctx.author.add_roles(vps_role, reason=f"{BOT_NAME} VPS ownership granted")
+                    except discord.Forbidden:
+                        logger.warning(f"Failed to assign VPS role to {ctx.author.name}")
+            
+            # Success message
+            expiry_info = format_expiry_time(expires_at.isoformat())
+            renewal_cost = int(get_setting('coins_vps_renewal_1day', 50))
+            
+            success_embed = create_success_embed("â VPS Deployed Successfully!", 
+                f"Your VPS is now running! ð\n\n"
+                f"**Container:** `{container_name}`\n"
+                f"**Node:** {selected_node['name']}\n"
+                f"**OS:** Ubuntu 22.04 LTS\n\n"
+                f"**Resources:**\n"
+                f"â¢ RAM: {ram}GB\n"
+                f"â¢ CPU: {cpu} Core\n"
+                f"â¢ Disk: {disk}GB\n\n"
+                f"**Expiration:**\n"
+                f"â¢ Expires: {expiry_info['text']}\n"
+                f"â¢ Date: {expires_at.strftime('%Y-%m-%d %H:%M')}\n"
+                f"â¢ Renewal: {renewal_cost} coins/day\n\n"
+                f"**Payment:**\n"
+                f"â¢ Cost: {cost:,} coins\n"
+                f"â¢ New Balance: {new_balance:,} coins")
+            
+            add_field(success_embed, "ð® Quick Start", 
+                f"`{PREFIX}manage` - Control your VPS\n"
+                f"`{PREFIX}manage` â SSH - Get terminal access\n"
+                f"`{PREFIX}renew 1 <days>` - Extend expiry", False)
+            
+            add_field(success_embed, "ð¡ Important", 
+                "â¢ Full root access via SSH\n"
+                "â¢ Docker-ready with nesting enabled\n"
+                "â¢ Back up your data regularly\n"
+                "â¢ Run `sudo resize2fs /` if needed", False)
+            
+            await msg.edit(embed=success_embed)
+            
+            logger.info(f"User {ctx.author.name} deployed VPS {container_name} for {cost} coins")
+            
+        except Exception as e:
+            # Refund coins on failure
+            add_coins(user_id, cost, 'refund', f'VPS deployment failed: {str(e)}')
+            await msg.edit(embed=create_error_embed("â Deployment Failed", 
+                f"Failed to deploy VPS: {str(e)}\n\n"
+                f"Your {cost:,} coins have been refunded.\n"
+                f"Please contact an admin for assistance."))
+            logger.error(f"VPS deployment failed for {ctx.author.name}: {e}")
+            
+    except asyncio.TimeoutError:
+        await msg.edit(embed=create_info_embed("â±ï¸ Timeout", "Deployment request timed out."))
+
+@bot.command(name='deploy-plans', aliases=['plans', 'vps-plans'])
+async def show_deploy_plans(ctx):
+    """Show available VPS deployment plans"""
+    plans = get_deploy_plans(active_only=True)
+    
+    if not plans:
+        await ctx.send(embed=create_error_embed("No Plans Available", 
+            "No deployment plans are currently available. Contact an admin."))
+        return
+    
+    embed = create_info_embed("ð VPS Deployment Plans", 
+        "Choose a plan and deploy your VPS!")
+    
+    for plan in plans:
+        plan_info = (
+            f"**Resources:**\n"
+            f"â¢ RAM: {plan['ram_gb']}GB\n"
+            f"â¢ CPU: {plan['cpu_cores']} Core{'s' if plan['cpu_cores'] > 1 else ''}\n"
+            f"â¢ Disk: {plan['disk_gb']}GB\n"
+            f"â¢ Duration: {plan['duration_days']} day{'s' if plan['duration_days'] > 1 else ''}\n\n"
+            f"**Cost:** {plan['cost_coins']:,} coins\n"
+            f"**Deploy:** `{PREFIX}deploy {plan['id']}`"
+        )
+        add_field(embed, f"{plan['icon']} {plan['name']}", plan_info, True)
+    
+    add_field(embed, "ð¡ How to Deploy", 
+        f"`{PREFIX}deploy <plan_id>`\n"
+        f"Example: `{PREFIX}deploy 2` (Basic plan)", False)
+    
+    embed.set_footer(text=f"{BOT_NAME} â¢ Limit: 1 VPS per user")
+    await ctx.send(embed=embed)
+
+@bot.command(name='resource-plans', aliases=['resources', 'upgrade-plans'])
+async def show_resource_plans(ctx):
+    """Show available resource upgrade plans"""
+    plans = get_resource_plans(active_only=True)
+    
+    if not plans:
+        await ctx.send(embed=create_error_embed("No Plans Available", 
+            "No resource plans are currently available. Contact an admin."))
+        return
+    
+    embed = create_info_embed("â¡ Resource Upgrade Plans", 
+        "Upgrade your VPS to more powerful resources!")
+    
+    for plan in plans:
+        plan_info = (
+            f"**New Resources:**\n"
+            f"â¢ RAM: {plan['ram_gb']}GB\n"
+            f"â¢ CPU: {plan['cpu_cores']} Core{'s' if plan['cpu_cores'] > 1 else ''}\n"
+            f"â¢ Disk: {plan['disk_gb']}GB\n\n"
+            f"**Upgrade Cost:** {plan['upgrade_cost']:,} coins\n"
+            f"**Upgrade:** `{PREFIX}upgrade <vps_id> {plan['id']}`"
+        )
+        add_field(embed, f"{plan['icon']} {plan['name']}", plan_info, True)
+    
+    add_field(embed, "ð¡ How to Upgrade", 
+        f"`{PREFIX}upgrade <vps_number> <plan_id>`\n"
+        f"Example: `{PREFIX}upgrade 1 3` (Upgrade VPS #1 to Medium)", False)
+    
+    add_field(embed, "ð Note", 
+        "Upgrades are permanent and cannot be downgraded.\n"
+        "Your VPS will be restarted during the upgrade.", False)
+    
+    embed.set_footer(text=f"{BOT_NAME} â¢ Instant resource upgrades")
+    await ctx.send(embed=embed)
+
+@bot.command(name='upgrade', aliases=['upgrade-vps', 'vps-upgrade'])
+async def upgrade_vps(ctx, vps_number: int = None, plan_id: int = None):
+    """Upgrade your VPS resources"""
+    user_id = str(ctx.author.id)
+    
+    if vps_number is None or plan_id is None:
+        await ctx.send(embed=create_error_embed("Usage", 
+            f"Usage: `{PREFIX}upgrade <vps_number> <plan_id>`\n\n"
+            f"**Example:** `{PREFIX}upgrade 1 3`\n"
+            f"**View Plans:** `{PREFIX}resource-plans`"))
+        return
+    
+    # Get user's VPS
+    vps_list = vps_data.get(user_id, [])
+    if not vps_list:
+        await ctx.send(embed=create_error_embed("No VPS Found", 
+            f"You don't have any VPS. Use `{PREFIX}deploy-plans` to create one."))
+        return
+    
+    if vps_number < 1 or vps_number > len(vps_list):
+        await ctx.send(embed=create_error_embed("Invalid VPS", 
+            f"You don't have VPS #{vps_number}. Use `{PREFIX}myvps` to see your VPS."))
+        return
+    
+    vps = vps_list[vps_number - 1]
+    
+    # Get resource plan
+    plan = get_resource_plan(plan_id)
+    if not plan or not plan['active']:
+        await ctx.send(embed=create_error_embed("Invalid Plan", 
+            f"Plan #{plan_id} not found. Use `{PREFIX}resource-plans` to see available plans."))
+        return
+    
+    # Check current resources
+    current_ram = int(vps['ram'].replace('GB', ''))
+    current_cpu = int(vps['cpu'])
+    current_disk = int(vps['storage'].replace('GB', ''))
+    
+    # Check if upgrade is needed
+    if (plan['ram_gb'] <= current_ram and 
+        plan['cpu_cores'] <= current_cpu and 
+        plan['disk_gb'] <= current_disk):
+        await ctx.send(embed=create_error_embed("No Upgrade Needed", 
+            f"Your VPS already has equal or better resources than the **{plan['name']}** plan.\n\n"
+            f"**Current:** {current_ram}GB RAM, {current_cpu} CPU, {current_disk}GB Disk\n"
+            f"**Plan:** {plan['ram_gb']}GB RAM, {plan['cpu_cores']} CPU, {plan['disk_gb']}GB Disk"))
+        return
+    
+    # Check coin balance
+    def check_balance():
+        coins_data = get_user_coins(user_id)
+        return coins_data['balance'], coins_data
+    
+    balance, coins_data = await run_in_executor(check_balance)
+    cost = plan['upgrade_cost']
+    
+    if balance < cost:
+        needed = cost - balance
+        await ctx.send(embed=create_error_embed("ð° Insufficient Coins", 
+            f"You need **{cost:,} coins** to upgrade to **{plan['name']}**.\n\n"
+            f"**Your Balance:** {balance:,} coins\n"
+            f"**You Need:** {needed:,} more coins\n\n"
+            f"Use `{PREFIX}coinhelp` to see how to earn coins!"))
+        return
+    
+    # Show upgrade confirmation
+    embed = create_warning_embed("â¡ Confirm VPS Upgrade", 
+        f"You're about to upgrade your VPS!\n\n"
+        f"**VPS:** `{vps['container_name']}`\n"
+        f"**Plan:** {plan['icon']} {plan['name']}\n\n"
+        f"**Current Resources:**\n"
+        f"â¢ RAM: {current_ram}GB â **{plan['ram_gb']}GB**\n"
+        f"â¢ CPU: {current_cpu} â **{plan['cpu_cores']}** Core{'s' if plan['cpu_cores'] > 1 else ''}\n"
+        f"â¢ Disk: {current_disk}GB â **{plan['disk_gb']}GB**\n\n"
+        f"**Cost:** {cost:,} coins\n"
+        f"**Your Balance:** {balance:,} coins\n"
+        f"**After Upgrade:** {balance - cost:,} coins\n\n"
+        f"â ï¸ **Warning:** VPS will be restarted during upgrade.\n"
+        f"React with â to confirm or â to cancel")
+    
+    msg = await ctx.send(embed=embed)
+    await msg.add_reaction("â")
+    await msg.add_reaction("â")
+    
+    def check(reaction, user):
+        return user == ctx.author and str(reaction.emoji) in ["â", "â"] and reaction.message.id == msg.id
+    
+    try:
+        reaction, user = await bot.wait_for('reaction_add', timeout=60.0, check=check)
+        
+        if str(reaction.emoji) == "â":
+            await msg.edit(embed=create_info_embed("â Cancelled", "VPS upgrade cancelled."))
+            return
+        
+        # Process payment
+        def process_payment():
+            success, new_balance = remove_coins(user_id, cost, 'vps_upgrade', 
+                                               f'Upgraded VPS to {plan["name"]} plan')
+            return success, new_balance
+        
+        success, new_balance = await run_in_executor(process_payment)
+        
+        if not success:
+            await msg.edit(embed=create_error_embed("â Payment Failed", 
+                "Failed to process payment. Please try again."))
+            return
+        
+        # Update message to show upgrade in progress
+        await msg.edit(embed=create_info_embed("â³ Upgrading VPS", 
+            "Your VPS is being upgraded... This may take a moment."))
+        
+        container_name = vps['container_name']
+        node_id = vps['node_id']
+        
+        try:
+            # Stop VPS
+            await execute_lxc(container_name, f"stop {container_name}", timeout=120, node_id=node_id)
+            
+            # Update resources
+            ram_mb = plan['ram_gb'] * 1024
+            await execute_lxc(container_name, f"config set {container_name} limits.memory {ram_mb}MB", node_id=node_id)
+            await execute_lxc(container_name, f"config set {container_name} limits.cpu {plan['cpu_cores']}", node_id=node_id)
+            await execute_lxc(container_name, f"config device set {container_name} root size={plan['disk_gb']}GB", node_id=node_id)
+            
+            # Start VPS
+            await execute_lxc(container_name, f"start {container_name}", node_id=node_id)
+            
+            # Update VPS data
+            old_specs = {
+                'ram': current_ram,
+                'cpu': current_cpu,
+                'disk': current_disk
+            }
+            
+            vps['ram'] = f"{plan['ram_gb']}GB"
+            vps['cpu'] = str(plan['cpu_cores'])
+            vps['storage'] = f"{plan['disk_gb']}GB"
+            vps['config'] = f"{plan['ram_gb']}GB RAM / {plan['cpu_cores']} CPU / {plan['disk_gb']}GB Disk"
+            
+            save_vps_data()
+            
+            # Log upgrade
+            new_specs = {
+                'ram': plan['ram_gb'],
+                'cpu': plan['cpu_cores'],
+                'disk': plan['disk_gb']
+            }
+            log_vps_upgrade(vps.get('id', 0), user_id, old_specs, new_specs, cost, user_id)
+            
+            # Success message
+            success_embed = create_success_embed("â VPS Upgraded Successfully!", 
+                f"Your VPS has been upgraded! ð\n\n"
+                f"**VPS:** `{container_name}`\n"
+                f"**Plan:** {plan['icon']} {plan['name']}\n\n"
+                f"**New Resources:**\n"
+                f"â¢ RAM: {plan['ram_gb']}GB\n"
+                f"â¢ CPU: {plan['cpu_cores']} Core{'s' if plan['cpu_cores'] > 1 else ''}\n"
+                f"â¢ Disk: {plan['disk_gb']}GB\n\n"
+                f"**Cost:** {cost:,} coins\n"
+                f"**New Balance:** {new_balance:,} coins\n\n"
+                f"Your VPS is now running with upgraded resources!")
+            
+            add_field(success_embed, "ð¡ Next Steps", 
+                f"â¢ Run `sudo resize2fs /` inside VPS to expand filesystem\n"
+                f"â¢ Use `{PREFIX}manage` to control your VPS\n"
+                f"â¢ Check stats with `{PREFIX}status {container_name}`", False)
+            
+            await msg.edit(embed=success_embed)
+            
+            logger.info(f"User {ctx.author.name} upgraded VPS {container_name} to {plan['name']} for {cost} coins")
+            
+        except Exception as e:
+            # Refund coins on failure
+            add_coins(user_id, cost, 'refund', f'VPS upgrade failed: {str(e)}')
+            await msg.edit(embed=create_error_embed("â Upgrade Failed", 
+                f"Failed to upgrade VPS: {str(e)}\n\n"
+                f"Your {cost:,} coins have been refunded.\n"
+                f"Please contact an admin for assistance."))
+            logger.error(f"VPS upgrade failed for {ctx.author.name}: {e}")
+            
+    except asyncio.TimeoutError:
+        await msg.edit(embed=create_info_embed("â±ï¸ Timeout", "Upgrade request timed out."))
 
 class ReinstallOSSelectView(discord.ui.View):
     def __init__(self, parent_view, container_name, owner_id, actual_idx, ram_gb, cpu, storage_gb, node_id):
@@ -1863,10 +4098,6 @@ class ReinstallOSSelectView(discord.ui.View):
         creating_embed = create_info_embed("Reinstalling VPS", f"Deploying {os_version} for `{self.container_name}`...")
         await interaction.response.edit_message(embed=creating_embed, view=self)
         ram_mb = self.ram_gb * 1024
-        
-        # Generate new password for reinstall
-        new_password = generate_strong_password()
-        
         try:
             # No need to delete again; already deleted in confirmation
             await execute_lxc(self.container_name, f"init {os_version} {self.container_name} -s {DEFAULT_STORAGE_POOL}", node_id=self.node_id)
@@ -1876,111 +4107,21 @@ class ReinstallOSSelectView(discord.ui.View):
             await apply_lxc_config(self.container_name, self.node_id)
             await execute_lxc(self.container_name, f"start {self.container_name}", node_id=self.node_id)
             await apply_internal_permissions(self.container_name, self.node_id)
-            
-            # Configure SSH and set new password
-            success, result = await configure_ssh(self.container_name, self.node_id, new_password)
-            if not success:
-                logger.warning(f"SSH configuration partially failed: {result}")
-            
-            # Execute HOST_MOTD command if configured
-            if HOST_MOTD:
-                try:
-                    await execute_lxc(self.container_name, f"exec {self.container_name} -- bash -c \"{HOST_MOTD}\"", node_id=self.node_id)
-                    logger.info(f"HOST_MOTD executed on {self.container_name}")
-                except Exception as e:
-                    logger.warning(f"HOST_MOTD execution failed for {self.container_name}: {e}")
-            
             await recreate_port_forwards(self.container_name)
             target_vps = vps_data[self.owner_id][self.actual_idx]
             target_vps["os_version"] = os_version
             target_vps["status"] = "running"
             target_vps["suspended"] = False
             target_vps["created_at"] = datetime.now().isoformat()
-            target_vps["root_password"] = new_password
             config_str = f"{self.ram_gb}GB RAM / {self.cpu} CPU / {self.storage_gb}GB Disk"
             target_vps["config"] = config_str
-            # IMPORTANT: Preserve expiration date during reinstall
-            # If expiration_date is missing or None, set it to current expiration + DEFAULT_VPS_EXPIRATION_DAYS
-            if not target_vps.get('expiration_date'):
-                # No expiration was set, so set it now
-                target_vps['expiration_date'] = (datetime.now() + timedelta(days=DEFAULT_VPS_EXPIRATION_DAYS)).isoformat()
-            # If expiration_date exists, keep it as is - don't reset on reinstall
-            save_vps_data_immediate()
+            save_vps_data()
             success_embed = create_success_embed("Reinstall Complete", f"VPS `{self.container_name}` has been successfully reinstalled!")
             add_field(success_embed, "Resources", f"**RAM:** {self.ram_gb}GB\n**CPU:** {self.cpu} Cores\n**Storage:** {self.storage_gb}GB", False)
             add_field(success_embed, "OS", os_version, True)
-            add_field(success_embed, "SSH Configuration", "✅ Configured (PasswordAuth enabled)\n🔐 New password generated and sent via DM", True)
             add_field(success_embed, "Features", "Nesting, Privileged, FUSE, Kernel Modules (Docker Ready), Unprivileged Ports from 0", False)
             add_field(success_embed, "Disk Note", "Run `sudo resize2fs /` inside VPS if needed to expand filesystem.", False)
             await interaction.followup.send(embed=success_embed, ephemeral=True)
-            
-            # Send DM to owner with new password
-            try:
-                owner = await bot.fetch_user(int(self.owner_id))
-                dm_embed = create_success_embed("🔄 VPS Reinstalled Successfully!", f"Your VPS `{self.container_name}` is ready with a new operating system!")
-                
-                # VPS Details Section
-                vps_details = f"""
-**Container:** `{self.container_name}`
-**New OS:** {os_version}
-**Configuration:** {self.ram_gb}GB RAM / {self.cpu} CPU / {self.storage_gb}GB Disk
-**Status:** 🟢 Running
-**Reinstalled:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-"""
-                add_field(dm_embed, "📊 VPS Details", vps_details.strip(), False)
-                
-                # Get all network interfaces - with timeout to prevent hanging
-                try:
-                    networks = await asyncio.wait_for(
-                        get_container_networks(self.container_name, self.node_id),
-                        timeout=3.0
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(f"Timeout getting networks for {self.container_name}")
-                    networks = {}
-                
-                if networks:
-                    # Format SSH access info with all real interfaces
-                    ssh_access_info = "**🖥️ Available Connection Points:**\n"
-                    for interface, ip in sorted(networks.items()):
-                        ssh_access_info += f"└─ **{interface}:** `ssh root@{ip}`\n"
-                    ssh_access_info += f"\n**🔑 New Login Credentials:**\n"
-                    ssh_access_info += f"**Username:** `root`\n"
-                    ssh_access_info += f"**Password:** `{new_password}`\n"
-                    ssh_access_info += f"\n**⚠️ Important:** Save this password securely!"
-                else:
-                    # If no interfaces found, still show credentials (important!)
-                    ssh_access_info = "**🔑 New Login Credentials:**\n"
-                    ssh_access_info += f"**Username:** `root`\n"
-                    ssh_access_info += f"**Password:** `{new_password}`\n"
-                    ssh_access_info += f"\n**� Network Setup:**\n"
-                    ssh_access_info += "Your VPS is initializing its network interfaces.\n"
-                    ssh_access_info += "They will be available in a few seconds.\n"
-                    ssh_access_info += f"\n**⚠️ Important:** Save this password securely!"
-                
-                add_field(dm_embed, "🔐 SSH Credentials & Access", ssh_access_info, False)
-                
-                # SSH Features
-                features_info = """✅ **SSH:** Password authentication enabled
-✅ **SFTP:** File transfer available
-✅ **Root:** Full root access granted
-✅ **Ports:** All ports available for forwarding
-✅ **Docker:** Nesting, privileged mode, FUSE enabled
-✅ **Fresh:** Clean OS installation ready to use"""
-                add_field(dm_embed, "⚙️ Features & Capabilities", features_info, False)
-                
-                # Support Section
-                support_info = f"""**Need Help?**
-• Use `{PREFIX}manage` to manage your VPS
-• Click 🔐 in manage to regenerate password
-• Contact admin for issues or upgrades
-• Your data from the previous OS has been wiped"""
-                add_field(dm_embed, "📞 Support & Management", support_info, False)
-                
-                await owner.send(embed=dm_embed)
-            except Exception as e:
-                logger.warning(f"Failed to send reinstall DM to {self.owner_id}: {e}")
-            
             self.stop()
         except Exception as e:
             error_embed = create_error_embed("Reinstall Failed", f"Error: {str(e)}")
@@ -2033,9 +4174,8 @@ class ManageView(discord.ui.View):
         whitelisted = vps.get('whitelisted', False)
         status_color = 0x00ff88 if status == 'running' and not suspended else 0xffaa00 if suspended else 0xff3366
         container_name = vps['container_name']
-        stats = await get_container_stats(container_name, vps['node_id'])
-        # Use stored VPS status, not stats status (stats status may be unknown for remote nodes)
-        status_text = f"{status.upper()}"
+        stats = await get_container_stats(container_name)
+        status_text = f"{stats['status'].upper()}"
         if suspended:
             status_text += " (SUSPENDED)"
         if whitelisted:
@@ -2059,68 +4199,39 @@ class ManageView(discord.ui.View):
         resource_info += f"**Storage:** {vps['storage']}\n"
         resource_info += f"**OS:** {vps.get('os_version', 'ubuntu:22.04')}\n"
         resource_info += f"**Uptime:** {stats['uptime']}"
-        add_field(embed, "📊 Allocated Resources", resource_info, False)
+        add_field(embed, "ð Allocated Resources", resource_info, False)
         
-        # Add expiration info
-        if vps.get('expiration_date'):
-            expiration_dt = datetime.fromisoformat(vps['expiration_date'])
-            days_remaining = (expiration_dt - datetime.now()).days
-            
-            if days_remaining < 0:
-                expiration_status = "🔴 EXPIRED"
-                expiration_color = 0xff3366
-            elif days_remaining <= EXPIRATION_WARNING_DAYS:
-                expiration_status = "🟡 EXPIRING SOON"
-                expiration_color = 0xffaa00
-            else:
-                expiration_status = "🟢 ACTIVE"
-                expiration_color = 0x00ff88
-            
-            expiration_info = f"**Status:** {expiration_status}\n"
-            expiration_info += f"**Expires:** {expiration_dt.strftime('%Y-%m-%d %H:%M:%S')}\n"
-            expiration_info += f"**Days Left:** {max(0, days_remaining)} days"
-            add_field(embed, "⏰ Expiration", expiration_info, False)
-        else:
-            add_field(embed, "⏰ Expiration", "No expiration date set", False)
+        # Add expiry information
+        expiry_info = format_expiry_time(vps.get('expires_at'))
+        add_field(embed, "â° Expiration", expiry_info['text'], True)
+        if expiry_info['status'] in ['warning', 'critical', 'urgent']:
+            add_field(embed, "ð¡ Renew", f"`{PREFIX}renew {vps.get('id', '?')} <days>`", True)
         
         if suspended:
-            add_field(embed, "⚠️ Suspended", "This VPS is suspended. Contact an admin to unsuspend.", False)
+            add_field(embed, "â ï¸ Suspended", "This VPS is suspended. Contact an admin to unsuspend.", False)
         if whitelisted:
-            add_field(embed, "✅ Whitelisted", "This VPS is exempt from auto-suspension.", False)
-        
-        # Safely build live stats (handle unknown values)
-        cpu_usage = f"{stats.get('cpu', 0):.1f}%" if stats.get('cpu') is not None else "Unknown"
-        ram_data = stats.get('ram', {})
-        ram_used = ram_data.get('used', 0) if isinstance(ram_data, dict) else 0
-        ram_total = ram_data.get('total', 0) if isinstance(ram_data, dict) else 0
-        ram_pct = ram_data.get('pct', 0.0) if isinstance(ram_data, dict) else 0.0
-        ram_str = f"{ram_used}/{ram_total} MB ({ram_pct:.1f}%)" if ram_total > 0 else "Unknown"
-        disk_usage = stats.get('disk', 'Unknown')
-        
-        live_stats = f"**CPU Usage:** {cpu_usage}\n**Memory:** {ram_str}\n**Disk:** {disk_usage}"
-        add_field(embed, "📈 Live Usage", live_stats, False)
-        add_field(embed, "🎮 Controls", "Use the buttons below to manage your VPS", False)
+            add_field(embed, "â Whitelisted", "This VPS is exempt from auto-suspension.", False)
+        live_stats = f"**CPU Usage:** {stats['cpu']:.1f}%\n**Memory:** {stats['ram']['used']}/{stats['ram']['total']} MB ({stats['ram']['pct']:.1f}%)\n**Disk:** {stats['disk']}"
+        add_field(embed, "ð Live Usage", live_stats, False)
+        add_field(embed, "ð® Controls", "Use the buttons below to manage your VPS", False)
         return embed
 
     def add_action_buttons(self):
         if not self.is_shared and not self.is_admin:
-            reinstall_button = discord.ui.Button(label="🔄 Reinstall", style=discord.ButtonStyle.danger)
+            reinstall_button = discord.ui.Button(label="ð Reinstall", style=discord.ButtonStyle.danger)
             reinstall_button.callback = lambda inter: self.action_callback(inter, 'reinstall')
             self.add_item(reinstall_button)
-        start_button = discord.ui.Button(label="▶ Start", style=discord.ButtonStyle.success)
+        start_button = discord.ui.Button(label="â¶ Start", style=discord.ButtonStyle.success)
         start_button.callback = lambda inter: self.action_callback(inter, 'start')
-        stop_button = discord.ui.Button(label="⏸ Stop", style=discord.ButtonStyle.secondary)
+        stop_button = discord.ui.Button(label="â¸ Stop", style=discord.ButtonStyle.secondary)
         stop_button.callback = lambda inter: self.action_callback(inter, 'stop')
-        ssh_button = discord.ui.Button(label="🔑 SSH", style=discord.ButtonStyle.primary)
+        ssh_button = discord.ui.Button(label="ð SSH", style=discord.ButtonStyle.primary)
         ssh_button.callback = lambda inter: self.action_callback(inter, 'tmate')
-        password_button = discord.ui.Button(label="🔐 Regen Password", style=discord.ButtonStyle.primary)
-        password_button.callback = lambda inter: self.action_callback(inter, 'regen_password')
-        stats_button = discord.ui.Button(label="📊 Stats", style=discord.ButtonStyle.secondary)
+        stats_button = discord.ui.Button(label="ð Stats", style=discord.ButtonStyle.secondary)
         stats_button.callback = lambda inter: self.action_callback(inter, 'stats')
         self.add_item(start_button)
         self.add_item(stop_button)
         self.add_item(ssh_button)
-        self.add_item(password_button)
         self.add_item(stats_button)
 
     async def select_vps(self, interaction: discord.Interaction):
@@ -2135,52 +4246,42 @@ class ManageView(discord.ui.View):
         await interaction.edit_original_response(embed=new_embed, view=self)
 
     async def action_callback(self, interaction: discord.Interaction, action: str):
-        # Defer immediately to prevent interaction timeout (3-second window)
-        try:
-            await interaction.response.defer(ephemeral=True)
-        except:
-            # Already responded or interaction expired
-            return
-        
         if str(interaction.user.id) != self.user_id and not self.is_admin:
-            await interaction.followup.send(embed=create_error_embed("Access Denied", "This is not your VPS!"), ephemeral=True)
+            await interaction.response.send_message(embed=create_error_embed("Access Denied", "This is not your VPS!"), ephemeral=True)
             return
         if self.selected_index is None:
-            await interaction.followup.send(embed=create_error_embed("No VPS Selected", "Please select a VPS first."), ephemeral=True)
+            await interaction.response.send_message(embed=create_error_embed("No VPS Selected", "Please select a VPS first."), ephemeral=True)
             return
         actual_idx = self.actual_index if self.is_shared else self.indices[self.selected_index]
         target_vps = vps_data[self.owner_id][actual_idx]
         suspended = target_vps.get('suspended', False)
         if suspended and not self.is_admin and action != 'stats':
-            await interaction.followup.send(embed=create_error_embed("Access Denied", "This VPS is suspended. Contact an admin to unsuspend."), ephemeral=True)
+            await interaction.response.send_message(embed=create_error_embed("Access Denied", "This VPS is suspended. Contact an admin to unsuspend."), ephemeral=True)
             return
         container_name = target_vps["container_name"]
         node_id = target_vps['node_id']
         if action == 'stats':
-            try:
-                stats = await get_container_stats(container_name, node_id)
-                stats_embed = create_info_embed("📈 Live Statistics", f"Real-time stats for `{container_name}`")
-                add_field(stats_embed, "Status", f"`{stats['status'].upper()}`", True)
-                add_field(stats_embed, "CPU", f"{stats['cpu']:.1f}%", True)
-                add_field(stats_embed, "Memory", f"{stats['ram']['used']}/{stats['ram']['total']} MB ({stats['ram']['pct']:.1f}%)", True)
-                add_field(stats_embed, "Disk", stats['disk'], True)
-                add_field(stats_embed, "Uptime", stats['uptime'], True)
-                await interaction.followup.send(embed=stats_embed, ephemeral=True)
-            except Exception as e:
-                await interaction.followup.send(embed=create_error_embed("Stats Failed", str(e)), ephemeral=True)
+            stats = await get_container_stats(container_name, node_id)
+            stats_embed = create_info_embed("ð Live Statistics", f"Real-time stats for `{container_name}`")
+            add_field(stats_embed, "Status", f"`{stats['status'].upper()}`", True)
+            add_field(stats_embed, "CPU", f"{stats['cpu']:.1f}%", True)
+            add_field(stats_embed, "Memory", f"{stats['ram']['used']}/{stats['ram']['total']} MB ({stats['ram']['pct']:.1f}%)", True)
+            add_field(stats_embed, "Disk", stats['disk'], True)
+            add_field(stats_embed, "Uptime", stats['uptime'], True)
+            await interaction.response.send_message(embed=stats_embed, ephemeral=True)
             return
         if action == 'reinstall':
             if self.is_shared or self.is_admin:
-                await interaction.followup.send(embed=create_error_embed("Access Denied", "Only the VPS owner can reinstall!"), ephemeral=True)
+                await interaction.response.send_message(embed=create_error_embed("Access Denied", "Only the VPS owner can reinstall!"), ephemeral=True)
                 return
             if suspended:
-                await interaction.followup.send(embed=create_error_embed("Cannot Reinstall", "Unsuspend the VPS first."), ephemeral=True)
+                await interaction.response.send_message(embed=create_error_embed("Cannot Reinstall", "Unsuspend the VPS first."), ephemeral=True)
                 return
             ram_gb = int(target_vps['ram'].replace('GB', ''))
             cpu = int(target_vps['cpu'])
             storage_gb = int(target_vps['storage'].replace('GB', ''))
             confirm_embed = create_warning_embed("Reinstall Warning",
-                f"⚠️ **WARNING:** This will erase all data on VPS `{container_name}` and reinstall a fresh OS.\n\n"
+                f"â ï¸ **WARNING:** This will erase all data on VPS `{container_name}` and reinstall a fresh OS.\n\n"
                 f"This action cannot be undone. Continue?")
             class ConfirmView(discord.ui.View):
                 def __init__(self, parent_view, container_name, owner_id, actual_idx, ram_gb, cpu, storage_gb, node_id):
@@ -2210,94 +4311,45 @@ class ManageView(discord.ui.View):
                     new_embed = await self.parent_view.create_vps_embed(self.parent_view.selected_index)
                     await inter.response.edit_message(embed=new_embed, view=self.parent_view)
 
-            await interaction.followup.send(embed=confirm_embed, view=ConfirmView(self, container_name, self.owner_id, actual_idx, ram_gb, cpu, storage_gb, node_id), ephemeral=True)
+            await interaction.response.send_message(embed=confirm_embed, view=ConfirmView(self, container_name, self.owner_id, actual_idx, ram_gb, cpu, storage_gb, node_id), ephemeral=True)
             return
-        
+        await interaction.response.defer(ephemeral=True)
         suspended = target_vps.get('suspended', False)
         if suspended:
             target_vps['suspended'] = False
-            save_vps_data_immediate()
+            save_vps_data()
         if action == 'start':
             try:
-                # Check current status to avoid "already running" error
-                current_status = target_vps.get('status', 'stopped')
-                if current_status == 'running':
-                    await interaction.followup.send(embed=create_info_embed("Already Running", f"VPS `{container_name}` is already running."), ephemeral=True)
-                    return
-                
                 await execute_lxc(container_name, f"start {container_name}", node_id=node_id)
                 target_vps["status"] = "running"
-                save_vps_data_immediate()
+                save_vps_data()
                 await apply_internal_permissions(container_name, node_id)
                 readded = await recreate_port_forwards(container_name)
                 await interaction.followup.send(embed=create_success_embed("VPS Started", f"VPS `{container_name}` is now running! Re-added {readded} port forwards."), ephemeral=True)
             except Exception as e:
-                # If error is "already running", update status
-                error_str = str(e).lower()
-                if "already running" in error_str:
-                    target_vps["status"] = "running"
-                    save_vps_data_immediate()
-                    await interaction.followup.send(embed=create_success_embed("VPS Started", f"VPS `{container_name}` is running!"), ephemeral=True)
-                else:
-                    await interaction.followup.send(embed=create_error_embed("Start Failed", str(e)), ephemeral=True)
+                await interaction.followup.send(embed=create_error_embed("Start Failed", str(e)), ephemeral=True)
         elif action == 'stop':
             try:
-                # Check current status to avoid "not running" error
-                current_status = target_vps.get('status', 'stopped')
-                if current_status == 'stopped':
-                    await interaction.followup.send(embed=create_info_embed("Already Stopped", f"VPS `{container_name}` is already stopped."), ephemeral=True)
-                    return
-                
                 await execute_lxc(container_name, f"stop {container_name}", timeout=120, node_id=node_id)
                 target_vps["status"] = "stopped"
-                save_vps_data_immediate()
+                save_vps_data()
                 await interaction.followup.send(embed=create_success_embed("VPS Stopped", f"VPS `{container_name}` has been stopped!"), ephemeral=True)
             except Exception as e:
-                # If error is "not running", update status
-                error_str = str(e).lower()
-                if "not running" in error_str or "is not running" in error_str:
-                    target_vps["status"] = "stopped"
-                    save_vps_data_immediate()
-                    await interaction.followup.send(embed=create_success_embed("VPS Stopped", f"VPS `{container_name}` is stopped!"), ephemeral=True)
-                else:
-                    await interaction.followup.send(embed=create_error_embed("Stop Failed", str(e)), ephemeral=True)
+                await interaction.followup.send(embed=create_error_embed("Stop Failed", str(e)), ephemeral=True)
         elif action == 'tmate':
             if suspended:
                 await interaction.followup.send(embed=create_error_embed("Access Denied", "Cannot access suspended VPS."), ephemeral=True)
                 return
             await interaction.followup.send(embed=create_info_embed("SSH Access", "Generating SSH connection..."), ephemeral=True)
             try:
-                # Check if VPS is running first
-                current_status = target_vps.get('status', 'stopped')
-                if current_status != 'running':
-                    await interaction.followup.send(embed=create_error_embed("VPS Not Running", "Start the VPS before accessing SSH."), ephemeral=True)
-                    return
-                
-                # Check if tmate is installed - handle "not running" gracefully
-                tmate_installed = False
+                # Check if tmate is installed
                 try:
                     await execute_lxc(container_name, f"exec {container_name} -- which tmate", node_id=node_id)
-                    tmate_installed = True
-                except Exception as e:
-                    error_str = str(e).lower()
-                    # "not running" means VPS stopped - try starting it
-                    if "not running" in error_str or "is not running" in error_str:
-                        await interaction.followup.send(embed=create_info_embed("Starting VPS", "VPS is stopped. Starting it..."), ephemeral=True)
-                        await execute_lxc(container_name, f"start {container_name}", node_id=node_id)
-                        target_vps["status"] = "running"
-                        save_vps_data_immediate()
-                        await asyncio.sleep(2)  # Wait for VPS to fully start
-                    
-                if not tmate_installed:
+                except:
                     await interaction.followup.send(embed=create_info_embed("Installing SSH", "Installing tmate..."), ephemeral=True)
-                    try:
-                        await execute_lxc(container_name, f"exec {container_name} -- apt-get update -y", node_id=node_id)
-                        await execute_lxc(container_name, f"exec {container_name} -- apt-get install tmate -y", node_id=node_id)
-                        await interaction.followup.send(embed=create_success_embed("Installed", "SSH service installed!"), ephemeral=True)
-                    except Exception as install_err:
-                        await interaction.followup.send(embed=create_error_embed("Install Failed", str(install_err)), ephemeral=True)
-                        return
-                
+                    await execute_lxc(container_name, f"exec {container_name} -- apt-get update -y", node_id=node_id)
+                    await execute_lxc(container_name, f"exec {container_name} -- apt-get install tmate -y", node_id=node_id)
+                    await interaction.followup.send(embed=create_success_embed("Installed", "SSH service installed!"), ephemeral=True)
                 session_name = f"{BOT_NAME.lower()}-session-{datetime.now().strftime('%Y%m%d%H%M%S')}"
                 await execute_lxc(container_name, f"exec {container_name} -- tmate -S /tmp/{session_name}.sock new-session -d", node_id=node_id)
                 await asyncio.sleep(3)
@@ -2305,10 +4357,10 @@ class ManageView(discord.ui.View):
                 ssh_url = ssh_output.strip()
                 if ssh_url:
                     try:
-                        ssh_embed = create_embed("🔑 SSH Access", f"SSH connection for VPS `{container_name}`:", 0x00ff88)
+                        ssh_embed = create_embed("ð SSH Access", f"SSH connection for VPS `{container_name}`:", 0x00ff88)
                         add_field(ssh_embed, "Command", f"```{ssh_url}```", False)
-                        add_field(ssh_embed, "⚠️ Security", "This link is temporary. Do not share it.", False)
-                        add_field(ssh_embed, "📝 Session", f"Session ID: {session_name}", False)
+                        add_field(ssh_embed, "â ï¸ Security", "This link is temporary. Do not share it.", False)
+                        add_field(ssh_embed, "ð Session", f"Session ID: {session_name}", False)
                         await interaction.user.send(embed=ssh_embed)
                         await interaction.followup.send(embed=create_success_embed("SSH Sent", f"Check your DMs for SSH link! Session: {session_name}"), ephemeral=True)
                     except discord.Forbidden:
@@ -2317,25 +4369,6 @@ class ManageView(discord.ui.View):
                     await interaction.followup.send(embed=create_error_embed("SSH Failed", "No SSH URL generated."), ephemeral=True)
             except Exception as e:
                 await interaction.followup.send(embed=create_error_embed("SSH Error", str(e)), ephemeral=True)
-        elif action == 'regen_password':
-            if suspended:
-                await interaction.followup.send(embed=create_error_embed("Access Denied", "Cannot regenerate password for suspended VPS."), ephemeral=True)
-                return
-            try:
-                # Generate new strong password
-                new_password = generate_strong_password()
-                
-                # Configure SSH and set new password
-                success, result = await configure_ssh(container_name, node_id, new_password)
-                if success:
-                    password_embed = create_success_embed("Password Regenerated", f"New root password generated for `{container_name}`")
-                    add_field(password_embed, "🔐 New Password", f"`{new_password}`\n*Save this password securely!*", False)
-                    add_field(password_embed, "ℹ️ Note", "You can now SSH into your VPS with the new password.", False)
-                    await interaction.followup.send(embed=password_embed, ephemeral=True)
-                else:
-                    await interaction.followup.send(embed=create_error_embed("Regen Failed", str(result)), ephemeral=True)
-            except Exception as e:
-                await interaction.followup.send(embed=create_error_embed("Error", f"Failed to regenerate password: {str(e)}"), ephemeral=True)
         new_embed = await self.create_vps_embed(self.selected_index)
         await interaction.edit_original_response(embed=new_embed, view=self)
 
@@ -2357,7 +4390,7 @@ async def manage_vps(ctx, user: discord.Member = None):
         vps_list = vps_data.get(user_id, [])
         if not vps_list:
             embed = create_error_embed("No VPS Found", f"You don't have any {BOT_NAME} VPS. Contact an admin to create one.")
-            add_field(embed, "Quick Actions", f"• `{PREFIX}manage` - Manage VPS\n• Contact admin for VPS creation", False)
+            add_field(embed, "Quick Actions", f"â¢ `{PREFIX}manage` - Manage VPS\nâ¢ Contact admin for VPS creation", False)
             await ctx.send(embed=embed)
             return
         view = ManageView(user_id, vps_list)
@@ -2367,67 +4400,54 @@ async def manage_vps(ctx, user: discord.Member = None):
 async def get_node_status(node_id: int) -> str:
     node = get_node(node_id)
     if not node:
-        return "❓ Unknown"
+        return "â Unknown"
     if node['is_local']:
-        return "🟢 Online (Local)"
-    # Remote nodes - check connectivity but don't spam errors
+        return "ð¢ Online (Local)"
     try:
         response = requests.get(f"{node['url']}/api/ping", params={'api_key': node['api_key']}, timeout=5)
         if response.status_code == 200:
-            return "🟢 Online"
+            return "ð¢ Online"
         else:
-            return "🔴 Offline (Network unreachable)"
-    except requests.exceptions.ConnectionError:
-        return "🔴 Unreachable (Network issue)"
-    except requests.exceptions.Timeout:
-        return "🔴 No response"
-    except Exception:
-        return "🔴 Offline"
+            return "ð´ Offline"
+    except Exception as e:
+        logger.error(f"Failed to ping node {node['name']}: {e}")
+        return "ð´ Offline"
 
 
 def get_host_disk_usage():
-    """Get host disk usage - cross-platform compatible"""
+    """Get host disk usage - cross-platform"""
     try:
-        import platform
-        system = platform.system()
-        
-        if system == "Windows":
-            # Windows: Use wmic or psutil
-            try:
-                import psutil
+        # Try using psutil first (cross-platform)
+        try:
+            import psutil
+            # Get disk usage for the root/main drive
+            if os.name == 'nt':  # Windows
+                disk = psutil.disk_usage('C:\\')
+            else:  # Linux/Unix
                 disk = psutil.disk_usage('/')
-                return f"{disk.used // (1024**3)} GB / {disk.total // (1024**3)} GB ({disk.percent}%)"
-            except ImportError:
-                # Fallback for Windows without psutil
-                try:
-                    result = subprocess.run(['wmic', 'LogicalDisk', 'get', 'Size,FreeSpace'], 
-                                          capture_output=True, text=True, timeout=5)
-                    lines = result.stdout.strip().split('\n')
-                    if len(lines) > 1:
-                        values = lines[1].split()
-                        if len(values) >= 2:
-                            size = int(values[0]) // (1024**3)
-                            free = int(values[1]) // (1024**3)
-                            used = size - free
-                            percent = (used / size * 100) if size > 0 else 0
-                            return f"{used} GB / {size} GB ({percent:.0f}%)"
-                except:
-                    pass
-                return "Unknown"
-        else:
-            # Linux/Unix: Use df command
-            result = subprocess.run(['df', '-h', '/'], capture_output=True, text=True, timeout=10)
+            
+            total_gb = disk.total / (1024**3)
+            used_gb = disk.used / (1024**3)
+            percent = disk.percent
+            
+            return f"{used_gb:.1f}GB/{total_gb:.1f}GB ({percent}%)"
+        except ImportError:
+            pass
+        
+        # Linux fallback
+        if shutil.which("df"):
+            result = subprocess.run(['df', '-h', '/'], capture_output=True, text=True)
             lines = result.stdout.splitlines()
             if len(lines) > 1:
                 parts = lines[1].split()
-                if len(parts) >= 5:
-                    used = parts[2]
-                    size = parts[1]
-                    perc = parts[4]
-                    return f"{used}/{size} ({perc})"
-            return "Unknown"
+                total = parts[1]
+                used = parts[2]
+                perc = parts[4]
+                return f"{used}/{total} ({perc})"
+        
+        return "Unknown"
     except Exception as e:
-        logger.debug(f"Error getting disk usage: {e}")
+        logger.error(f"Error getting disk usage: {e}")
         return "Unknown"
 
 
@@ -2450,8 +4470,7 @@ async def get_host_stats(node_id: int) -> Dict:
             stats['disk'] = stats.get('disk', 'Unknown')
             return stats
         except Exception as e:
-            # Remote node unreachable - don't spam error logs
-            logger.debug(f"Remote node {node['name']} stats unavailable: {type(e).__name__}")
+            logger.error(f"Failed to get host stats from node {node['name']}: {e}")
             return {"cpu": 0.0, "ram": 0.0, "disk": "Unknown"}
 
 
@@ -2465,7 +4484,7 @@ async def vps_list(ctx, node_id: int = 1):
 
     # Get node status
     status = await get_node_status(node_id)
-    is_online = status.startswith("🟢")
+    is_online = status.startswith("ð¢")
 
     # Get node resource stats (will use defaults if offline)
     stats = await get_host_stats(node_id)
@@ -2476,12 +4495,12 @@ async def vps_list(ctx, node_id: int = 1):
     # Resources field text (modern: compact inline stats with progress-like emojis)
     if is_online:
         resources_text = (
-            f"**CPU** {cpu_usage:.0f}% {'█' * int(cpu_usage / 5) + '░' * (20 - int(cpu_usage / 5))} "
-            f"\n**RAM** {ram_usage:.0f}% {'█' * int(ram_usage / 5) + '░' * (20 - int(ram_usage / 5))} "
+            f"**CPU** {cpu_usage:.0f}% {'â' * int(cpu_usage / 5) + 'â' * (20 - int(cpu_usage / 5))} "
+            f"\n**RAM** {ram_usage:.0f}% {'â' * int(ram_usage / 5) + 'â' * (20 - int(ram_usage / 5))} "
             f"\n**Disk** {disk_usage}"
         )
     else:
-        resources_text = "⚠️ Resources unavailable (Offline)"
+        resources_text = "â ï¸ Resources unavailable (Offline)"
 
     # Get VPS capacity
     current_vps = get_current_vps_count(node_id)
@@ -2526,79 +4545,64 @@ async def vps_list(ctx, node_id: int = 1):
             other += 1
 
         # Modern emoji: vibrant and status-specific
-        status_emoji = "🟢" if status == 'running' and not suspended_flag else "🟡" if suspended_flag else "🔴"
+        status_emoji = "ð¢" if status == 'running' and not suspended_flag else "ð¡" if suspended_flag else "ð´"
         vps_status = status.upper()
         if suspended_flag:
             vps_status += " (SUSPENDED)"
         if vps.get('whitelisted', False):
             vps_status += " (WHITELISTED)"
         config = vps.get('config', 'Custom')
-        
-        # Add expiration info
-        expiration_info = ""
-        if vps.get('expiration_date'):
-            expiration_dt = datetime.fromisoformat(vps['expiration_date'])
-            days_remaining = (expiration_dt - datetime.now()).days
-            if days_remaining < 0:
-                expiration_info = " | 🔴 EXPIRED"
-            elif days_remaining <= EXPIRATION_WARNING_DAYS:
-                expiration_info = f" | 🟡 EXPIRES({days_remaining}d)"
-            else:
-                expiration_info = f" | 🟢 ({days_remaining}d)"
-        else:
-            expiration_info = " | ⏰ No exp"
-        
-        vps_info.append(f"{status_emoji} **{i}.** {username} • `{vps['container_name']}`\n _{vps_status} | {config}{expiration_info}_")
+        vps_info.append(f"{status_emoji} **{i}.** {username} â¢ `{vps['container_name']}`\n _{vps_status} | {config}_")
 
     # Create main embed (modern: gradient-inspired colors, clean typography)
     color = 0x10b981 if is_online else 0xef4444  # Teal green / Soft red for modern feel
     embed = create_embed(
-        title=f"🖥️ VPS Dashboard - {node['name']}",
+        title=f"ð¥ï¸ VPS Dashboard - {node['name']}",
         description=f"**ID:** `{node_id}` | **Region:** {node['location']}\n*Updated: <t:{int(datetime.now().timestamp())}:R>*",
         color=color
     )
     embed.set_thumbnail(url=node.get('thumbnail_url', None))
 
     # Inline status and capacity for compact top row
-    add_field(embed, "📡 **Status**", status, True)
-    add_field(embed, "🗄️ **Capacity**", capacity_text, True)
+    add_field(embed, "ð¡ **Status**", status, True)
+    add_field(embed, "ðï¸ **Capacity**", capacity_text, True)
 
     # Resources field with modern bar visualization
-    add_field(embed, "📊 **Resources**", resources_text, False)
+    add_field(embed, "ð **Resources**", resources_text, False)
 
     # Summary field (modern: compact bullet-like with inline emojis)
     summary_text = (
-        f"**Total:** {total_vps} 📊\n"
-        f"**Running:** {running} 🟢\n"
-        f"**Stopped:** {stopped} ⏸️\n"
-        f"**Suspended:** {suspended} 🟡"
+        f"**Total:** {total_vps} ð\n"
+        f"**Running:** {running} ð¢\n"
+        f"**Stopped:** {stopped} â¸ï¸\n"
+        f"**Suspended:** {suspended} ð¡"
     )
     if other > 0:
-        summary_text += f"\n**Other:** {other} ⚠️"
-    add_field(embed, "📈 **Summary**", summary_text, True)
+        summary_text += f"\n**Other:** {other} â ï¸"
+    add_field(embed, "ð **Summary**", summary_text, True)
 
     # VPS List - chunked embeds with modern pagination
     if vps_info:
         chunk_size = 6  # Smaller chunks for cleaner mobile-friendly embeds
         chunks = [vps_info[i:i + chunk_size] for i in range(0, len(vps_info), chunk_size)]
         first_chunk_text = "\n".join(chunks[0])
-        add_field(embed, "📋 **Active VPS (1/{len(chunks)})**", f"```{first_chunk_text}```", False)
+        add_field(embed, "ð **Active VPS (1/{len(chunks)})**", f"```{first_chunk_text}```", False)
 
         # Paginated follow-ups with consistent styling
         for idx, chunk in enumerate(chunks[1:], 2):
             page_embed = create_embed(
-                title=f"🖥️ VPS Dashboard - {node['name']} (Page {idx}/{len(chunks)})",
+                title=f"ð¥ï¸ VPS Dashboard - {node['name']} (Page {idx}/{len(chunks)})",
                 description=f"**ID:** `{node_id}` | **Region:** {node['location']}\n*Updated: <t:{int(datetime.now().timestamp())}:R>*",
                 color=color
             )
             chunk_text = "\n".join(chunk)
-            add_field(page_embed, "📋 **VPS List**", f"```{chunk_text}```", False)
-            page_embed.set_footer(text=f"Made by Hopingboyz • {len(vps_info)} VPS shown")
+            add_field(page_embed, "ð **VPS List**", f"```{chunk_text}```", False)
+            page_embed.set_footer(text=f"Total: {total_vps} VPS | Powered by Your Bot")
             await ctx.send(embed=page_embed)
     else:
-        add_field(embed, "📋 **VPS List**", "No deployments yet. Launch one! 🚀", False)
+        add_field(embed, "ð **VPS List**", "No deployments yet. Launch one! ð", False)
 
-    embed.set_footer(text=f"Made by Hopingboyz • Total: {len(vps_info)} VPS")
+    embed.set_footer(text=f"Refresh with !vps-list {node_id} | {len(vps_info)} shown")
     await ctx.send(embed=embed)
 
 @bot.command(name='list-all')
@@ -2629,30 +4633,15 @@ async def list_all_vps(ctx):
             for i, vps in enumerate(vps_list):
                 node = get_node(vps['node_id'])
                 node_name = node['name'] if node else "Unknown"
-                status_emoji = "🟢" if vps.get('status') == 'running' and not vps.get('suspended', False) else "🟡" if vps.get('suspended', False) else "🔴"
+                status_emoji = "ð¢" if vps.get('status') == 'running' and not vps.get('suspended', False) else "ð¡" if vps.get('suspended', False) else "ð´"
                 status_text = vps.get('status', 'unknown').upper()
                 if vps.get('suspended', False):
                     status_text += " (SUSPENDED)"
                 if vps.get('whitelisted', False):
                     status_text += " (WHITELISTED)"
-                
-                # Add expiration info
-                expiration_text = ""
-                if vps.get('expiration_date'):
-                    expiration_dt = datetime.fromisoformat(vps['expiration_date'])
-                    days_remaining = (expiration_dt - datetime.now()).days
-                    if days_remaining < 0:
-                        expiration_text = " • 🔴 EXPIRED"
-                    elif days_remaining <= EXPIRATION_WARNING_DAYS:
-                        expiration_text = f" • 🟡 EXPIRING({days_remaining}d)"
-                    else:
-                        expiration_text = f" • 🟢 ({days_remaining}d)"
-                else:
-                    expiration_text = " • ⏰ No exp"
-                
-                vps_info.append(f"{status_emoji} **{user.name}** - VPS {i+1}: `{vps['container_name']}` - {vps.get('config', 'Custom')} - {status_text} (Node: {node_name}){expiration_text}")
+                vps_info.append(f"{status_emoji} **{user.name}** - VPS {i+1}: `{vps['container_name']}` - {vps.get('config', 'Custom')} - {status_text} (Node: {node_name})")
         except discord.NotFound:
-            vps_info.append(f"❓ Unknown User ({user_id}) - {len(vps_list)} VPS")
+            vps_info.append(f"â Unknown User ({user_id}) - {len(vps_list)} VPS")
     embed = create_embed("All VPS Information", "Complete overview of all VPS deployments and user statistics", 0x1a1a1a)
     add_field(embed, "System Overview", f"**Total Users:** {total_users}\n**Total VPS:** {total_vps}\n**Running:** {running_vps}\n**Stopped:** {stopped_vps}\n**Suspended:** {suspended_vps}\n**Whitelisted:** {whitelisted_vps}", False)
     await ctx.send(embed=embed)
@@ -2817,7 +4806,7 @@ async def ports_command(ctx, subcmd: str = None, *args):
         host_port = await create_port_forward(user_id, container, vps_port, node_id)
         if host_port:
             embed = create_success_embed("Port Forward Created", f"VPS #{vps_num} port {vps_port} (TCP/UDP) forwarded to host port {host_port}.")
-            add_field(embed, "Access", f"External: {YOUR_SERVER_IP}:{host_port} → VPS:{vps_port} (TCP & UDP)", False)
+            add_field(embed, "Access", f"External: {YOUR_SERVER_IP}:{host_port} â VPS:{vps_port} (TCP & UDP)", False)
             add_field(embed, "Quota Update", f"Used: {used + 1}/{allocated}", False)
             await ctx.send(embed=embed)
         else:
@@ -2832,7 +4821,8 @@ async def ports_command(ctx, subcmd: str = None, *args):
             for f in forwards:
                 vps_num = next((i+1 for i, v in enumerate(vps_data.get(user_id, [])) if v['container_name'] == f['vps_container']), 'Unknown')
                 created = datetime.fromisoformat(f['created_at']).strftime('%Y-%m-%d %H:%M')
-                text.append(f"**ID {f['id']}** - VPS #{vps_num}: {f['vps_port']} (TCP/UDP) → {f['host_port']} (Created: {created})")
+                created = datetime.fromisoformat(f['created_at']).strftime('%Y-%m-%d %H:%M')
+                text.append(f"**ID {f['id']}** - VPS #{vps_num}: {f['vps_port']} (TCP/UDP) â {f['host_port']} (Created: {created})")
             add_field(embed, "Active Forwards", "\n".join(text[:10]), False)
             if len(forwards) > 10:
                 add_field(embed, "Note", f"Showing 10 of {len(forwards)}. Remove unused with {PREFIX}ports remove <id>.")
@@ -2856,46 +4846,6 @@ async def ports_command(ctx, subcmd: str = None, *args):
     else:
         await ctx.send(embed=create_error_embed("Invalid Subcommand", f"Use: add <vps_num> <port>, list, remove <id>"))
 
-class ConfirmDeleteView(discord.ui.View):
-    """Confirmation dialog for VPS deletion"""
-    def __init__(self, admin_id: str, vps_id: int, container_name: str, vps_number: int):
-        super().__init__(timeout=60)  # 60 seconds to confirm
-        self.admin_id = admin_id  # Admin who initiated the delete command
-        self.vps_id = vps_id
-        self.container_name = container_name
-        self.vps_number = vps_number
-        self.confirmed = False
-    
-    @discord.ui.button(label="✅ Confirm Delete", style=discord.ButtonStyle.danger)
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Allow only the admin who initiated the delete command to confirm
-        if str(interaction.user.id) != self.admin_id:
-            await interaction.response.send_message(
-                embed=create_error_embed("Access Denied", "Only the admin who initiated the deletion can confirm!"),
-                ephemeral=True
-            )
-            return
-        
-        self.confirmed = True
-        await interaction.response.defer()
-        self.stop()
-    
-    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Allow only the admin who initiated the delete command to cancel
-        if str(interaction.user.id) != self.admin_id:
-            await interaction.response.send_message(
-                embed=create_error_embed("Access Denied", "Only the admin who initiated the deletion can cancel!"),
-                ephemeral=True
-            )
-            return
-        
-        await interaction.response.send_message(
-            embed=create_info_embed("Deletion Cancelled", f"VPS deletion for {self.container_name} has been cancelled."),
-            ephemeral=True
-        )
-        self.stop()
-
 @bot.command(name='delete-vps')
 @is_admin()
 async def delete_vps(ctx, user: discord.Member, vps_number: int, *, reason: str = "No reason"):
@@ -2910,39 +4860,16 @@ async def delete_vps(ctx, user: discord.Member, vps_number: int, *, reason: str 
 
     vps = vps_data[user_id][vps_number - 1]
     container_name = vps["container_name"]
-    vps_id = vps.get("id", vps_number)
     node_id = vps.get("node_id", 1)
 
-    # Create confirmation embed with clearer info
-    confirm_embed = create_embed("⚠️ Confirm VPS Deletion", f"Are you sure you want to delete this VPS?", 0xff3366)
-    add_field(confirm_embed, "VPS Details", 
-        f"**VPS ID:** #{vps_id}\n"
-        f"**Container:** `{container_name}`\n"
-        f"**Owner:** {user.mention}\n"
-        f"**Config:** {vps.get('config', 'Custom')}\n"
-        f"**Status:** {vps.get('status', 'unknown').upper()}", 
-        False)
-    add_field(confirm_embed, "Action", "Click **✅ Confirm Delete** to permanently delete this VPS, or **❌ Cancel** to abort.", False)
-    add_field(confirm_embed, "Reason", reason, False)
-    
-    confirmation_view = ConfirmDeleteView(str(ctx.author.id), vps_id, container_name, vps_number)
-    confirmation_msg = await ctx.send(embed=confirm_embed, view=confirmation_view)
-    
-    # Wait for confirmation
-    await confirmation_view.wait()
-    
-    if not confirmation_view.confirmed:
-        return  # User cancelled or timeout
-    
-    # Proceed with deletion
     await ctx.send(embed=create_info_embed(
-        "🗑️ Deleting VPS",
-        f"Removing VPS #{vps_id} for {user.mention}..."
+        "Deleting VPS",
+        f"Removing VPS #{vps_number} for {user.mention}..."
     ))
 
     node_result = "Not checked"
 
-    # 1️⃣ Try deleting container
+    # 1ï¸â£ Try deleting container
     try:
         await execute_lxc(container_name, f"delete {container_name} --force", node_id=node_id)
         node_result = "Container deleted successfully."
@@ -2953,7 +4880,7 @@ async def delete_vps(ctx, user: discord.Member, vps_number: int, *, reason: str 
         else:
             node_result = f"Container delete failed: {e}"
 
-    # 2️⃣ DELETE FROM DATABASE
+    # 2ï¸â£ DELETE FROM DATABASE (THIS IS THE FIX)
     conn = get_db()
     cur = conn.cursor()
 
@@ -2963,7 +4890,7 @@ async def delete_vps(ctx, user: discord.Member, vps_number: int, *, reason: str 
     conn.commit()
     conn.close()
 
-    # 3️⃣ Remove from memory
+    # 3ï¸â£ Remove from memory
     del vps_data[user_id][vps_number - 1]
     if not vps_data[user_id]:
         del vps_data[user_id]
@@ -2979,10 +4906,10 @@ async def delete_vps(ctx, user: discord.Member, vps_number: int, *, reason: str 
 
     save_vps_data()
 
-    # 4️⃣ Success embed
-    embed = create_success_embed("✅ VPS Deleted Successfully")
-    add_field(embed, "VPS ID", f"#{vps_id}", True)
+    # 4ï¸â£ Success embed
+    embed = create_success_embed("ð UnixNodes - VPS Deleted Successfully")
     add_field(embed, "Owner", user.mention, True)
+    add_field(embed, "VPS Number", f"#{vps_number}", True)
     add_field(embed, "Container", container_name, False)
     add_field(embed, "Node Result", node_result, False)
     add_field(embed, "Reason", reason, False)
@@ -3172,127 +5099,84 @@ async def system_status(ctx):
         # Determine node type
         if node['is_local']:
             local_nodes += 1
-            node_type = "🖥️ Local"
+            node_type = "ð¥ï¸ Local"
         else:
             remote_nodes += 1
-            node_type = "🌐 Remote"
+            node_type = "ð Remote"
         
         # Check node status
         if node['is_local']:
-            status = "🟢 Online"
+            status = "ð¢ Online"
             running_nodes += 1
             
-            # Get local resources (approximate) - cross-platform
+            # Get local resources (approximate)
             try:
-                import platform
-                system = platform.system()
-                
-                if system == "Windows":
-                    # Windows: Use psutil
-                    try:
-                        import psutil
-                        mem = psutil.virtual_memory()
-                        total_ram_gb = mem.total / (1024**3)
-                        free_ram_gb = mem.available / (1024**3)
-                        
-                        cpu_count = psutil.cpu_count()
-                        total_cpu = cpu_count if cpu_count else 0
-                        
-                        disk = psutil.disk_usage('C:\\' if 'C:\\' else '/')
-                        total_disk = disk.total / (1024**3)
-                    except ImportError:
-                        # Fallback for Windows without psutil
-                        try:
-                            result = subprocess.run(['wmic', 'OS', 'get', 'TotalVisibleMemorySize,FreePhysicalMemory'], 
-                                                  capture_output=True, text=True, timeout=5)
-                            lines = result.stdout.strip().split('\n')
-                            if len(lines) > 1:
-                                values = lines[1].split()
-                                total_ram_gb = int(values[0]) / (1024**2)
-                                free_ram_gb = int(values[1]) / (1024**2)
-                            else:
-                                total_ram_gb = 0
-                                free_ram_gb = 0
-                            
-                            result = subprocess.run(['wmic', 'os', 'get', 'numberofprocessors'], 
-                                                  capture_output=True, text=True, timeout=5)
-                            total_cpu = int(result.stdout.strip().split('\n')[-1]) if result.stdout else 0
-                            
-                            total_disk = 0  # Approximate
-                        except:
-                            total_ram_gb = 0
-                            free_ram_gb = 0
-                            total_cpu = 0
-                            total_disk = 0
+                # Get system memory
+                mem_result = subprocess.run(['free', '-m'], capture_output=True, text=True)
+                mem_lines = mem_result.stdout.splitlines()
+                if len(mem_lines) > 1:
+                    mem = mem_lines[1].split()
+                    total_ram_mb = int(mem[1])
+                    used_ram_mb = int(mem[2])
+                    free_ram_mb = total_ram_mb - used_ram_mb
+                    total_ram_gb = total_ram_mb / 1024
+                    free_ram_gb = free_ram_mb / 1024
                 else:
-                    # Linux/Unix: Use traditional commands
-                    # Get system memory
-                    mem_result = subprocess.run(['free', '-m'], capture_output=True, text=True, timeout=10)
-                    mem_lines = mem_result.stdout.splitlines()
-                    if len(mem_lines) > 1:
-                        mem = mem_lines[1].split()
-                        total_ram_mb = int(mem[1])
-                        used_ram_mb = int(mem[2])
-                        free_ram_mb = total_ram_mb - used_ram_mb
-                        total_ram_gb = total_ram_mb / 1024
-                        free_ram_gb = free_ram_mb / 1024
-                    else:
-                        total_ram_gb = 0
-                        free_ram_gb = 0
-                    
-                    # Get CPU cores
-                    cpu_result = subprocess.run(['nproc'], capture_output=True, text=True, timeout=10)
-                    total_cpu = int(cpu_result.stdout.strip()) if cpu_result.stdout.strip() else 0
-                    
-                    # Get disk space
-                    disk_result = subprocess.run(['df', '-h', '/'], capture_output=True, text=True, timeout=10)
-                    disk_lines = disk_result.stdout.splitlines()
-                    if len(disk_lines) > 1:
-                        disk_parts = disk_lines[1].split()
-                        total_disk_str = disk_parts[1]
-                        # Convert to GB
-                        if 'T' in total_disk_str:
-                            total_disk = float(total_disk_str.replace('T', '')) * 1024
-                        elif 'G' in total_disk_str:
-                            total_disk = float(total_disk_str.replace('G', ''))
-                        elif 'M' in total_disk_str:
-                            total_disk = float(total_disk_str.replace('M', '')) / 1024
-                        else:
-                            total_disk = 0
+                    total_ram_gb = 0
+                    free_ram_gb = 0
+                
+                # Get CPU cores
+                cpu_result = subprocess.run(['nproc'], capture_output=True, text=True)
+                total_cpu = int(cpu_result.stdout.strip()) if cpu_result.stdout.strip() else 0
+                
+                # Get disk space
+                disk_result = subprocess.run(['df', '-h', '/'], capture_output=True, text=True)
+                disk_lines = disk_result.stdout.splitlines()
+                if len(disk_lines) > 1:
+                    disk_parts = disk_lines[1].split()
+                    total_disk_str = disk_parts[1]
+                    # Convert to GB
+                    if 'T' in total_disk_str:
+                        total_disk = float(total_disk_str.replace('T', '')) * 1024
+                    elif 'G' in total_disk_str:
+                        total_disk = float(total_disk_str.replace('G', ''))
+                    elif 'M' in total_disk_str:
+                        total_disk = float(total_disk_str.replace('M', '')) / 1024
                     else:
                         total_disk = 0
+                else:
+                    total_disk = 0
                 
                 # Calculate free resources (simplified - actual would need more complex logic)
-                free_cpu = max(0, total_cpu - (total_cpu_allocated // total_nodes)) if total_nodes > 0 else 0
-                free_disk = max(0, total_disk - (total_disk_allocated // total_nodes)) if total_nodes > 0 else 0
+                free_cpu = max(0, total_cpu - (total_cpu_allocated // total_nodes))  # Approximate
+                free_disk = max(0, total_disk - (total_disk_allocated // total_nodes))  # Approximate
                 
                 # Update totals
-                if total_ram_gb > 0:
-                    total_node_ram_allocated += total_ram_gb - free_ram_gb
-                    total_node_ram_free += free_ram_gb
-                if total_cpu > 0:
-                    total_node_cpu_allocated += total_cpu - free_cpu
-                    total_node_cpu_free += free_cpu
-                if total_disk > 0:
-                    total_node_disk_allocated += total_disk - free_disk
-                    total_node_disk_free += free_disk
+                total_node_ram_allocated += total_ram_gb - free_ram_gb
+                total_node_cpu_allocated += total_cpu - free_cpu
+                total_node_disk_allocated += total_disk - free_disk
+                total_node_ram_free += free_ram_gb
+                total_node_cpu_free += free_cpu
+                total_node_disk_free += free_disk
                 
             except Exception as e:
-                logger.debug(f"Error getting local node resources: {e}")
-                status = "⚠️ Unknown"
-                # Don't reset to 0, just skip this node's resources
+                logger.error(f"Error getting local node resources: {e}")
+                status = "â ï¸ Unknown"
+                total_node_ram_free = 0
+                total_node_cpu_free = 0
+                total_node_disk_free = 0
         else:
             # Check remote node status
             try:
                 response = requests.get(f"{node['url']}/api/ping", params={'api_key': node['api_key']}, timeout=5)
                 if response.status_code == 200:
-                    status = "🟢 Online"
+                    status = "ð¢ Online"
                     running_nodes += 1
                 else:
-                    status = "🔴 Offline"
+                    status = "ð´ Offline"
                     stopped_nodes += 1
             except:
-                status = "🔴 Offline"
+                status = "ð´ Offline"
                 stopped_nodes += 1
         
         # Get current VPS count on this node
@@ -3302,7 +5186,7 @@ async def system_status(ctx):
         
         node_statuses.append(
             f"**{node['name']}** ({node_type})\n"
-            f"📍 {node['location']} • 📊 {node_vps_count}/{capacity} VPS ({usage_percentage:.0f}%)\n"
+            f"ð {node['location']} â¢ ð {node_vps_count}/{capacity} VPS ({usage_percentage:.0f}%)\n"
             f"Status: {status}"
         )
     
@@ -3311,13 +5195,13 @@ async def system_status(ctx):
     
     # Create main embed
     embed = create_embed(
-        title="📊 System Status Dashboard",
+        title="ð System Status Dashboard",
         description=f"**{BOT_NAME}** - Complete System Overview\n*Generated in {response_time:.0f}ms*",
         color=0x1a1a1a
     )
     
     # Bot & Uptime Section
-    add_field(embed, "🤖 Bot Status", 
+    add_field(embed, "ð¤ Bot Status", 
         f"**Uptime:** {bot_uptime}\n"
         f"**Latency:** {round(bot.latency * 1000)}ms\n"
         f"**Version:** {BOT_VERSION}\n"
@@ -3325,25 +5209,25 @@ async def system_status(ctx):
         True)
     
     # Nodes Section
-    add_field(embed, "🌐 Nodes Overview",
+    add_field(embed, "ð Nodes Overview",
         f"**Total Nodes:** {total_nodes}\n"
-        f"**Running:** {running_nodes} 🟢\n"
-        f"**Stopped:** {stopped_nodes} 🔴\n"
+        f"**Running:** {running_nodes} ð¢\n"
+        f"**Stopped:** {stopped_nodes} ð´\n"
         f"**Local/Remote:** {local_nodes}/{remote_nodes}",
         True)
     
     # VPS & Users Section
-    add_field(embed, "👥 Users & VPS",
+    add_field(embed, "ð¥ Users & VPS",
         f"**Total Users:** {total_users}\n"
         f"**Total VPS:** {total_vps}\n"
-        f"**Running:** {running_vps} 🟢\n"
-        f"**Stopped:** {stopped_vps} 🔴\n"
-        f"**Suspended:** {suspended_vps} 🟡\n"
-        f"**Whitelisted:** {whitelisted_vps} ✅",
+        f"**Running:** {running_vps} ð¢\n"
+        f"**Stopped:** {stopped_vps} ð´\n"
+        f"**Suspended:** {suspended_vps} ð¡\n"
+        f"**Whitelisted:** {whitelisted_vps} â",
         True)
     
     # Resources Section - Allocated vs Free
-    add_field(embed, "💾 Resource Allocation",
+    add_field(embed, "ð¾ Resource Allocation",
         f"**RAM Allocated:** {total_ram_allocated} GB\n"
         f"**RAM Free:** {total_node_ram_free:.1f} GB\n"
         f"**CPU Allocated:** {total_cpu_allocated} Cores\n"
@@ -3353,7 +5237,7 @@ async def system_status(ctx):
         True)
     
     # System & Admin Section
-    add_field(embed, "⚙️ System Information",
+    add_field(embed, "âï¸ System Information",
         f"**Total Admins:** {total_admins}\n"
         f"**Main Admin:** <@{MAIN_ADMIN_ID}>\n"
         f"**Ports Allocated:** {total_ports_allocated}\n"
@@ -3368,55 +5252,28 @@ async def system_status(ctx):
         chunks = [node_text[i:i+1024] for i in range(0, len(node_text), 1024)]
         
         for idx, chunk in enumerate(chunks, 1):
-            title = "📡 Node Details" if idx == 1 else f"📡 Node Details (Part {idx})"
+            title = "ð¡ Node Details" if idx == 1 else f"ð¡ Node Details (Part {idx})"
             add_field(embed, title, chunk, False)
     
-    # Expiration Status Section
-    expiring_soon_count = 0
-    expired_count = 0
-    active_exp_count = 0
-    no_exp_count = 0
-    
-    for user_id, vps_list in vps_data.items():
-        for vps in vps_list:
-            if vps.get('expiration_date'):
-                expiration_dt = datetime.fromisoformat(vps['expiration_date'])
-                days_remaining = (expiration_dt - datetime.now()).days
-                if days_remaining < 0:
-                    expired_count += 1
-                elif days_remaining <= EXPIRATION_WARNING_DAYS:
-                    expiring_soon_count += 1
-                else:
-                    active_exp_count += 1
-            else:
-                no_exp_count += 1
-    
-    add_field(embed, "⏰ VPS Expiration Status",
-        f"**🟢 Active:** {active_exp_count} VPS\n"
-        f"**🟡 Expiring Soon:** {expiring_soon_count} VPS\n"
-        f"**🔴 Expired:** {expired_count} VPS\n"
-        f"**🔵 No Expiration:** {no_exp_count} VPS",
-        True)
-    
     # System Health Indicator
-    health_status = "✅ Excellent"
+    health_status = "â Excellent"
     health_color = 0x00ff88
     
     if running_nodes == 0:
-        health_status = "🔴 Critical - No nodes running"
+        health_status = "ð´ Critical - No nodes running"
         health_color = 0xff3366
     elif stopped_nodes > 0:
-        health_status = "🟡 Warning - Some nodes offline"
+        health_status = "ð¡ Warning - Some nodes offline"
         health_color = 0xffaa00
     elif total_vps == 0:
-        health_status = "ℹ️ No VPS deployed"
+        health_status = "â¹ï¸ No VPS deployed"
         health_color = 0x00ccff
     
-    add_field(embed, "🏥 System Health", health_status, False)
+    add_field(embed, "ð¥ System Health", health_status, False)
     
     # Footer with current time
-    embed.set_footer(text=f"Made by Hopingboyz • System Status • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                    icon_url=BOT_ICON_URL)
+    embed.set_footer(text=f"{BOT_NAME} System Status â¢ Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                    icon_url="https://i.imgur.com/dpatuSj.png")
     
     await ctx.send(embed=embed)
 
@@ -3461,18 +5318,55 @@ async def status_summary(ctx):
                 stopped_vps += 1
     
     embed = create_success_embed(
-        "📈 Quick Status Summary",
-        f"**Nodes:** {running_nodes}/{total_nodes} 🟢\n"
+        "ð Quick Status Summary",
+        f"**Nodes:** {running_nodes}/{total_nodes} ð¢\n"
         f"**VPS:** {total_vps} total\n"
-        f"• Running: {running_vps} 🟢\n"
-        f"• Stopped: {stopped_vps} 🔴\n"
-        f"• Suspended: {suspended_vps} 🟡\n"
-        f"**Users:** {total_users} 👥\n"
+        f"â¢ Running: {running_vps} ð¢\n"
+        f"â¢ Stopped: {stopped_vps} ð´\n"
+        f"â¢ Suspended: {suspended_vps} ð¡\n"
+        f"**Users:** {total_users} ð¥\n"
         f"**Bot Latency:** {round(bot.latency * 1000)}ms"
     )
     
     embed.set_footer(text=f"Use '{PREFIX}status' for detailed information")
     await ctx.send(embed=embed)
+
+@bot.command(name='maintenance')
+@is_admin()
+async def maintenance_toggle(ctx, mode: str = None):
+    """Turn maintenance mode on/off. Usage: !maintenance on | off | status"""
+    global MAINTENANCE_MODE
+    if mode is None or mode.lower() not in ('on', 'off', 'status'):
+        await ctx.send(embed=create_error_embed(
+            "Usage", f"`{PREFIX}maintenance on` / `{PREFIX}maintenance off` / `{PREFIX}maintenance status`"
+        ))
+        return
+
+    mode = mode.lower()
+    if mode == 'status':
+        state = "ð¢ ON" if MAINTENANCE_MODE else "ð´ OFF"
+        await ctx.send(embed=create_info_embed("Maintenance Mode", f"Current status: **{state}**"))
+        return
+
+    new_state = (mode == 'on')
+    if MAINTENANCE_MODE == new_state:
+        await ctx.send(embed=create_info_embed("Maintenance Mode", f"Maintenance mode is already **{'ON' if new_state else 'OFF'}**."))
+        return
+
+    MAINTENANCE_MODE = new_state
+    set_setting('maintenance_mode', '1' if new_state else '0')
+
+    if new_state:
+        await ctx.send(embed=create_success_embed(
+            "ð ï¸ Maintenance Mode Enabled",
+            f"Only admins can use commands now. Toggle off with `{PREFIX}maintenance off`."
+        ))
+    else:
+        await ctx.send(embed=create_success_embed(
+            "â Maintenance Mode Disabled",
+            "All users can use commands again."
+        ))
+
 
 @bot.command(name='admin-add')
 @is_main_admin()
@@ -3488,7 +5382,7 @@ async def admin_add(ctx, user: discord.Member):
     save_admin_data()
     await ctx.send(embed=create_success_embed("Admin Added", f"{user.mention} is now an admin!"))
     try:
-        await user.send(embed=create_embed("🎉 Admin Role Granted", f"You are now an admin by {ctx.author.mention}", 0x00ff88))
+        await user.send(embed=create_embed("ð Admin Role Granted", f"You are now an admin by {ctx.author.mention}", 0x00ff88))
     except discord.Forbidden:
         await ctx.send(embed=create_info_embed("Notification Failed", f"Could not DM {user.mention}"))
 
@@ -3506,7 +5400,7 @@ async def admin_remove(ctx, user: discord.Member):
     save_admin_data()
     await ctx.send(embed=create_success_embed("Admin Removed", f"{user.mention} is no longer an admin!"))
     try:
-        await user.send(embed=create_embed("⚠️ Admin Role Revoked", f"Your admin role was removed by {ctx.author.mention}", 0xff3366))
+        await user.send(embed=create_embed("â ï¸ Admin Role Revoked", f"Your admin role was removed by {ctx.author.mention}", 0xff3366))
     except discord.Forbidden:
         await ctx.send(embed=create_info_embed("Notification Failed", f"Could not DM {user.mention}"))
 
@@ -3515,20 +5409,20 @@ async def admin_remove(ctx, user: discord.Member):
 async def admin_list(ctx):
     admins = admin_data.get("admins", [])
     main_admin = await bot.fetch_user(MAIN_ADMIN_ID)
-    embed = create_embed("👑 Admin Team", "Current administrators:", 0x1a1a1a)
-    add_field(embed, "🔰 Main Admin", f"{main_admin.mention} (ID: {MAIN_ADMIN_ID})", False)
+    embed = create_embed("ð Admin Team", "Current administrators:", 0x1a1a1a)
+    add_field(embed, "ð° Main Admin", f"{main_admin.mention} (ID: {MAIN_ADMIN_ID})", False)
     if admins:
         admin_list = []
         for admin_id in admins:
             try:
                 admin_user = await bot.fetch_user(int(admin_id))
-                admin_list.append(f"• {admin_user.mention} (ID: {admin_id})")
+                admin_list.append(f"â¢ {admin_user.mention} (ID: {admin_id})")
             except:
-                admin_list.append(f"• Unknown User (ID: {admin_id})")
+                admin_list.append(f"â¢ Unknown User (ID: {admin_id})")
         admin_text = "\n".join(admin_list)
-        add_field(embed, "🛡️ Admins", admin_text, False)
+        add_field(embed, "ð¡ï¸ Admins", admin_text, False)
     else:
-        add_field(embed, "🛡️ Admins", "No additional admins", False)
+        add_field(embed, "ð¡ï¸ Admins", "No additional admins", False)
     await ctx.send(embed=embed)
 
 @bot.command(name="userinfo")
@@ -3537,16 +5431,16 @@ async def user_info(ctx, user: discord.Member):
     user_id = str(user.id)
     vps_list = vps_data.get(user_id, [])
 
-    # ─── Embed ─────────────────────────────────────────────────
+    # âââ Embed âââââââââââââââââââââââââââââââââââââââââââââââââ
     embed = create_embed(
-        title="👤 User Dashboard",
+        title="ð¤ User Dashboard",
         description=f"Statistics & resources for {user.mention}",
         color=0x1A1A1A
     )
 
-    # ─── Row 1 : User Info ─────────────────────────────────────
+    # âââ Row 1 : User Info âââââââââââââââââââââââââââââââââââââ
     embed.add_field(
-        name="👤 User",
+        name="ð¤ User",
         value=(
             f"**Name:** `{user.name}`\n"
             f"**ID:** `{user.id}`\n"
@@ -3557,18 +5451,18 @@ async def user_info(ctx, user: discord.Member):
 
     is_admin_user = user_id == str(MAIN_ADMIN_ID) or user_id in admin_data.get("admins", [])
     embed.add_field(
-        name="🛡️ Admin",
-        value="✅ Yes" if is_admin_user else "❌ No",
+        name="ð¡ï¸ Admin",
+        value="â Yes" if is_admin_user else "â No",
         inline=True
     )
 
     embed.add_field(
-        name="🖥️ VPS Count",
+        name="ð¥ï¸ VPS Count",
         value=f"`{len(vps_list)}` VPS",
         inline=True
     )
 
-    # ─── If VPS Exists ─────────────────────────────────────────
+    # âââ If VPS Exists âââââââââââââââââââââââââââââââââââââââââ
     if vps_list:
         total_ram = total_cpu = total_storage = 0
         running = suspended = whitelisted = 0
@@ -3588,38 +5482,37 @@ async def user_info(ctx, user: discord.Member):
             total_cpu += cpu
 
             if vps.get("suspended"):
-                status = "⛔ SUSPENDED"
+                status = "â SUSPENDED"
                 suspended += 1
             elif vps.get("status") == "running":
-                status = "🟢 RUNNING"
+                status = "ð¢ RUNNING"
                 running += 1
             else:
-                status = "🔴 STOPPED"
+                status = "ð´ STOPPED"
 
             if vps.get("whitelisted"):
                 whitelisted += 1
 
             vps_lines.append(
                 f"**{i}.** `{vps['container_name']}`\n"
-                f"{status} | `{ram}GB` RAM • `{cpu}` CPU • `{storage}GB` Disk\n"
-                f"📍 Node: `{node_name}`" + 
-                (f"\n⏰ {('🔴 EXPIRED' if (datetime.fromisoformat(vps['expiration_date']) - datetime.now()).days < 0 else '🟡 EXPIRING' if (datetime.fromisoformat(vps['expiration_date']) - datetime.now()).days <= EXPIRATION_WARNING_DAYS else '🟢 ACTIVE')} • {(datetime.fromisoformat(vps['expiration_date']).strftime('%Y-%m-%d'))} ({max(0, (datetime.fromisoformat(vps['expiration_date']) - datetime.now()).days)}d)" if vps.get('expiration_date') else "\n⏰ No expiration set")
+                f"{status} | `{ram}GB` RAM â¢ `{cpu}` CPU â¢ `{storage}GB` Disk\n"
+                f"ð Node: `{node_name}`"
             )
 
-        # ─── Row 2 : VPS Summary ────────────────────────────────
+        # âââ Row 2 : VPS Summary ââââââââââââââââââââââââââââââââ
         embed.add_field(
-            name="📊 VPS Summary",
+            name="ð VPS Summary",
             value=(
-                f"🖥️ `{len(vps_list)}` Total\n"
-                f"🟢 `{running}` Running\n"
-                f"⛔ `{suspended}` Suspended\n"
-                f"✅ `{whitelisted}` Whitelisted"
+                f"ð¥ï¸ `{len(vps_list)}` Total\n"
+                f"ð¢ `{running}` Running\n"
+                f"â `{suspended}` Suspended\n"
+                f"â `{whitelisted}` Whitelisted"
             ),
             inline=True
         )
 
         embed.add_field(
-            name="📈 Resources",
+            name="ð Resources",
             value=(
                 f"**RAM:** `{total_ram} GB`\n"
                 f"**CPU:** `{total_cpu} Cores`\n"
@@ -3632,28 +5525,28 @@ async def user_info(ctx, user: discord.Member):
         port_used = get_user_used_ports(user_id)
 
         embed.add_field(
-            name="🌐 Ports",
+            name="ð Ports",
             value=f"`{port_used}/{port_quota}` Used",
             inline=True
         )
 
-        # ─── VPS List (Split if needed) ────────────────────────
+        # âââ VPS List (Split if needed) ââââââââââââââââââââââââ
         vps_text = "\n\n".join(vps_lines)
         for i in range(0, len(vps_text), 1024):
             embed.add_field(
-                name="📋 VPS List",
+                name="ð VPS List",
                 value=vps_text[i:i + 1024],
                 inline=False
             )
 
     else:
         embed.add_field(
-            name="🖥️ VPS",
-            value="❌ No VPS assigned",
+            name="ð¥ï¸ VPS",
+            value="â No VPS assigned",
             inline=False
         )
 
-    embed.set_footer(text="Made by Hopingboyz • User Resource Dashboard")
+    embed.set_footer(text="UnixNodes â¢ User Resource Dashboard")
     embed.timestamp = ctx.message.created_at
 
     await ctx.send(embed=embed)
@@ -3661,7 +5554,7 @@ async def user_info(ctx, user: discord.Member):
 @bot.command(name="serverstats")
 @is_admin()
 async def server_stats(ctx):
-    # ─── Counts ────────────────────────────────────────────────
+    # âââ Counts ââââââââââââââââââââââââââââââââââââââââââââââââ
     total_users = len(vps_data)
     total_admins = len(admin_data.get("admins", [])) + 1
     total_vps = sum(len(vps_list) for vps_list in vps_data.values())
@@ -3670,7 +5563,7 @@ async def server_stats(ctx):
     running_vps = suspended_vps = stopped_vps = 0
     whitelisted_vps = 0
 
-    # ─── VPS Data ──────────────────────────────────────────────
+    # âââ VPS Data ââââââââââââââââââââââââââââââââââââââââââââââ
     for vps_list in vps_data.values():
         for vps in vps_list:
             total_ram += int(vps.get("ram", "0GB").replace("GB", ""))
@@ -3688,7 +5581,7 @@ async def server_stats(ctx):
             if vps.get("whitelisted", False):
                 whitelisted_vps += 1
 
-    # ─── Ports ─────────────────────────────────────────────────
+    # âââ Ports âââââââââââââââââââââââââââââââââââââââââââââââââ
     conn = get_db()
     cur = conn.cursor()
 
@@ -3699,107 +5592,73 @@ async def server_stats(ctx):
     total_ports_used = cur.fetchone()[0] or 0
     conn.close()
 
-    # ─── Embed ─────────────────────────────────────────────────
+    # âââ Embed âââââââââââââââââââââââââââââââââââââââââââââââââ
     embed = create_embed(
-        title="📊 Server Statistics",
+        title="ð Server Statistics",
         description="**Live Infrastructure Dashboard**",
         color=0x1A1A1A
     )
 
-    # ── Row 1 ──────────────────────────────────────────────────
+    # ââ Row 1 ââââââââââââââââââââââââââââââââââââââââââââââââââ
     embed.add_field(
-        name="👥 Users",
+        name="ð¥ Users",
         value=f"`{total_users}` Users\n`{total_admins}` Admins",
         inline=True
     )
 
     embed.add_field(
-        name="🖥️ VPS",
+        name="ð¥ï¸ VPS",
         value=(
             f"Total: `{total_vps}`\n"
-            f"🟢 `{running_vps}` Running\n"
-            f"⛔ `{suspended_vps}` Suspended"
+            f"ð¢ `{running_vps}` Running\n"
+            f"â `{suspended_vps}` Suspended"
         ),
         inline=True
     )
 
     embed.add_field(
-        name="📌 Status",
+        name="ð Status",
         value=(
-            f"🔴 `{stopped_vps}` Stopped\n"
-            f"✅ `{whitelisted_vps}` Whitelisted"
+            f"ð´ `{stopped_vps}` Stopped\n"
+            f"â `{whitelisted_vps}` Whitelisted"
         ),
         inline=True
     )
 
-    # ── Row 2 ──────────────────────────────────────────────────
+    # ââ Row 2 ââââââââââââââââââââââââââââââââââââââââââââââââââ
     embed.add_field(
-        name="📈 RAM",
+        name="ð RAM",
         value=f"`{total_ram} GB`",
         inline=True
     )
 
     embed.add_field(
-        name="⚙️ CPU",
+        name="âï¸ CPU",
         value=f"`{total_cpu} Cores`",
         inline=True
     )
 
     embed.add_field(
-        name="💾 Storage",
+        name="ð¾ Storage",
         value=f"`{total_storage} GB`",
         inline=True
     )
 
-    # ─── Expiration Counts ─────────────────────────────────────
-    expiring_soon_count = 0
-    expired_count = 0
-    active_exp_count = 0
-    no_exp_count = 0
-    
-    for vps_list in vps_data.values():
-        for vps in vps_list:
-            if vps.get('expiration_date'):
-                expiration_dt = datetime.fromisoformat(vps['expiration_date'])
-                days_remaining = (expiration_dt - datetime.now()).days
-                if days_remaining < 0:
-                    expired_count += 1
-                elif days_remaining <= EXPIRATION_WARNING_DAYS:
-                    expiring_soon_count += 1
-                else:
-                    active_exp_count += 1
-            else:
-                no_exp_count += 1
-
-    # ── Row 3 ──────────────────────────────────────────────────
+    # ââ Row 3 ââââââââââââââââââââââââââââââââââââââââââââââââââ
     embed.add_field(
-        name="⏰ Expiration",
-        value=(
-            f"🟢 `{active_exp_count}` Active\n"
-            f"🟡 `{expiring_soon_count}` Expiring Soon\n"
-            f"🔴 `{expired_count}` Expired\n"
-            f"🔵 `{no_exp_count}` No Exp"
-        ),
-        inline=True
-    )
-
-    embed.add_field(
-        name="🌐 Ports Allocated",
+        name="ð Ports Allocated",
         value=f"`{total_ports_allocated}`",
         inline=True
     )
 
     embed.add_field(
-        name="🔌 Ports In Use",
+        name="ð Ports In Use",
         value=f"`{total_ports_used}`",
         inline=True
     )
 
-    # ── Row 4 ──────────────────────────────────────────────────
-
-    # ── Row 4 ──────────────────────────────────────────────────
     embed.add_field(
-        name="📊 Port Utilization",
+        name="ð Utilization",
         value=(
             f"`{total_ports_used}/{total_ports_allocated}`"
             if total_ports_allocated else "`N/A`"
@@ -3807,7 +5666,7 @@ async def server_stats(ctx):
         inline=True
     )
 
-    embed.set_footer(text="Made by Hopingboyz • Real-Time Monitoring")
+    embed.set_footer(text="UnixNodes â¢ Real-Time Monitoring")
     embed.timestamp = ctx.message.created_at
 
     await ctx.send(embed=embed)
@@ -3828,28 +5687,14 @@ async def vps_info(ctx, container_name: str = None):
                         status_text += " (SUSPENDED)"
                     if vps.get('whitelisted', False):
                         status_text += " (WHITELISTED)"
-                    
-                    # Add expiration info
-                    expiration_text = ""
-                    if vps.get('expiration_date'):
-                        expiration_dt = datetime.fromisoformat(vps['expiration_date'])
-                        days_remaining = (expiration_dt - datetime.now()).days
-                        if days_remaining < 0:
-                            expiration_text = " • 🔴 EXPIRED"
-                        elif days_remaining <= EXPIRATION_WARNING_DAYS:
-                            expiration_text = f" • 🟡 EXPIRING ({days_remaining}d)"
-                        else:
-                            expiration_text = f" • 🟢 ({days_remaining}d)"
-                    
-                    all_vps.append(f"**{user.name}** - VPS {i+1}: `{vps['container_name']}` - {status_text} (Node: {node_name}){expiration_text}")
+                    all_vps.append(f"**{user.name}** - VPS {i+1}: `{vps['container_name']}` - {status_text} (Node: {node_name})")
             except:
                 pass
         vps_text = "\n".join(all_vps)
         chunks = [vps_text[i:i+1024] for i in range(0, len(vps_text), 1024)]
         for idx, chunk in enumerate(chunks, 1):
-            embed = create_embed(f"🖥️ All VPS (Part {idx}/{len(chunks)})", f"Complete list of all VPS deployments with expiration status", 0x2ecc71)
-            add_field(embed, "VPS Inventory", chunk, False)
-            embed.set_footer(text=f"Made by Hopingboyz • VPS Information System")
+            embed = create_embed(f"ð¥ï¸ All VPS (Part {idx})", f"List of all VPS deployments", 0x1a1a1a)
+            add_field(embed, "VPS List", chunk, False)
             await ctx.send(embed=embed)
     else:
         found_vps = None
@@ -3867,97 +5712,30 @@ async def vps_info(ctx, container_name: str = None):
             return
         node = get_node(found_vps['node_id'])
         node_name = node['name'] if node else "Unknown"
-        
-        # Determine status color based on expiration and suspension
-        status_color = 0x1a1a1a
-        if found_vps.get('suspended', False):
-            status_color = 0xffaa00
-        elif found_vps.get('expiration_date'):
-            expiration_dt = datetime.fromisoformat(found_vps['expiration_date'])
-            days_remaining = (expiration_dt - datetime.now()).days
-            if days_remaining < 0:
-                status_color = 0xff3366
-            elif days_remaining <= EXPIRATION_WARNING_DAYS:
-                status_color = 0xffaa00
-            else:
-                status_color = 0x2ecc71
-        
         suspended_text = " (SUSPENDED)" if found_vps.get('suspended', False) else ""
         whitelisted_text = " (WHITELISTED)" if found_vps.get('whitelisted', False) else ""
-        embed = create_embed(f"🖥️ VPS Information - {container_name}", f"Detailed VPS profile owned by {found_user.mention}{suspended_text}{whitelisted_text}", status_color)
-        
-        add_field(embed, "👤 Owner", f"**Name:** {found_user.name}\n**ID:** `{found_user.id}`\n**Mention:** {found_user.mention}", False)
-        
-        add_field(embed, "🌐 Location & Node", f"**Node:** {node_name}\n**Node Type:** {'� Local' if node.get('is_local') else '🌐 Remote'}\n**Node ID:** `{found_vps.get('node_id', 1)}`", True)
-        
-        add_field(embed, "�📊 Specifications", f"**RAM:** `{found_vps['ram']}`\n**CPU:** `{found_vps['cpu']}` Cores\n**Storage:** `{found_vps['storage']}`\n**Config:** {found_vps.get('config', 'Custom')}", True)
-        
-        # Status information
-        status_info = f"**Current Status:** `{found_vps.get('status', 'unknown').upper()}`\n"
-        status_info += f"**Suspended:** {'🟡 Yes' if found_vps.get('suspended', False) else '🟢 No'}\n"
-        status_info += f"**Whitelisted:** {'✅ Yes' if found_vps.get('whitelisted', False) else '❌ No'}\n"
-        status_info += f"**Created:** `{found_vps.get('created_at', 'Unknown')}`"
-        add_field(embed, "📈 Status", status_info, False)
-        
-        # Expiration information
-        if found_vps.get('expiration_date'):
-            expiration_dt = datetime.fromisoformat(found_vps['expiration_date'])
-            days_remaining = (expiration_dt - datetime.now()).days
-            
-            if days_remaining < 0:
-                exp_status = "🔴 EXPIRED"
-                exp_color = "FF3366"
-            elif days_remaining <= EXPIRATION_WARNING_DAYS:
-                exp_status = "🟡 EXPIRING SOON"
-                exp_color = "FFAA00"
-            else:
-                exp_status = "🟢 ACTIVE"
-                exp_color = "2ECC71"
-            
-            exp_info = f"**Status:** {exp_status}\n"
-            exp_info += f"**Expires On:** `{expiration_dt.strftime('%Y-%m-%d %H:%M:%S')}`\n"
-            exp_info += f"**Days Remaining:** `{max(0, days_remaining)}` days\n"
-            exp_info += f"**Time Left:** `{max(0, days_remaining)} days` from today"
-            add_field(embed, "⏰ Expiration", exp_info, False)
-        else:
-            add_field(embed, "⏰ Expiration", f"**Status:** 🔵 No expiration date set\n**Action:** Use `{PREFIX}set-expiration` to configure", False)
-        
+        embed = create_embed(f"ð¥ï¸ VPS Information - {container_name}", f"Details for VPS owned by {found_user.mention}{suspended_text}{whitelisted_text} on node {node_name}", 0x1a1a1a)
+        add_field(embed, "ð¤ Owner", f"**Name:** {found_user.name}\n**ID:** {found_user.id}", False)
+        add_field(embed, "ð Specifications", f"**RAM:** {found_vps['ram']}\n**CPU:** {found_vps['cpu']} Cores\n**Storage:** {found_vps['storage']}", False)
+        add_field(embed, "ð Status", f"**Current:** {found_vps.get('status', 'unknown').upper()}{suspended_text}{whitelisted_text}\n**Suspended:** {found_vps.get('suspended', False)}\n**Whitelisted:** {found_vps.get('whitelisted', False)}\n**Created:** {found_vps.get('created_at', 'Unknown')}", False)
+        if 'config' in found_vps:
+            add_field(embed, "âï¸ Configuration", f"**Config:** {found_vps['config']}", False)
         if found_vps.get('shared_with'):
             shared_users = []
             for shared_id in found_vps['shared_with']:
                 try:
                     shared_user = await bot.fetch_user(int(shared_id))
-                    shared_users.append(f"• {shared_user.mention} (`{shared_id}`)")
+                    shared_users.append(f"â¢ {shared_user.mention}")
                 except:
-                    shared_users.append(f"• Unknown User (`{shared_id}`)")
+                    shared_users.append(f"â¢ Unknown User ({shared_id})")
             shared_text = "\n".join(shared_users)
-            add_field(embed, "🔗 Shared Access", shared_text, False)
-        
-        # Port forwarding info
+            add_field(embed, "ð Shared With", shared_text, False)
         conn = get_db()
         cur = conn.cursor()
         cur.execute('SELECT COUNT(*) FROM port_forwards WHERE vps_container = ?', (container_name,))
         port_count = cur.fetchone()[0]
-        cur.execute('SELECT * FROM port_forwards WHERE vps_container = ? LIMIT 5', (container_name,))
-        ports = cur.fetchall()
         conn.close()
-        
-        if port_count > 0:
-            port_info = f"**Total:** `{port_count}` forwarded ports (TCP & UDP)\n"
-            if ports:
-                port_info += "**Active Forwards:**\n"
-                for p in ports:
-                    port_info += f"  • `{p['host_port']}` → VPS:`{p['vps_port']}`\n"
-                if port_count > 5:
-                    port_info += f"  • ... +{port_count - 5} more"
-            add_field(embed, "🌐 Port Forwarding", port_info, False)
-        else:
-            add_field(embed, "🌐 Port Forwarding", "**Status:** No active port forwards", False)
-        
-        # OS information
-        add_field(embed, "🐧 Operating System", f"`{found_vps.get('os_version', 'ubuntu:22.04')}`", True)
-        
-        embed.set_footer(text=f"Made by Hopingboyz • VPS Information System • Container: {container_name}")
+        add_field(embed, "ð Active Ports", f"{port_count} forwarded ports (TCP/UDP)", False)
         await ctx.send(embed=embed)
 
 @bot.command(name='restart-vps')
@@ -3990,7 +5768,7 @@ async def execute_command(ctx, container_name: str, *, command: str):
         if output.strip():
             if len(output) > 1000:
                 output = output[:1000] + "\n... (truncated)"
-            add_field(embed, "📤 Output", f"```\n{output}\n```", False)
+            add_field(embed, "ð¤ Output", f"```\n{output}\n```", False)
         await ctx.send(embed=embed)
     except Exception as e:
         await ctx.send(embed=create_error_embed("Execution Failed", f"Error: {str(e)}"))
@@ -3998,7 +5776,7 @@ async def execute_command(ctx, container_name: str, *, command: str):
 @bot.command(name='stop-vps-all')
 @is_admin()
 async def stop_all_vps(ctx):
-    embed = create_warning_embed("Stopping All VPS", "⚠️ **WARNING:** This will stop ALL running VPS on all nodes.\n\nThis action cannot be undone. Continue?")
+    embed = create_warning_embed("Stopping All VPS", "â ï¸ **WARNING:** This will stop ALL running VPS on all nodes.\n\nThis action cannot be undone. Continue?")
     class ConfirmView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=60)
@@ -4222,12 +6000,12 @@ async def vps_stats(ctx, container_name: str):
     await ctx.send(embed=create_info_embed("Gathering Statistics", f"Collecting statistics for VPS `{container_name}`..."))
     try:
         stats = await get_container_stats(container_name, node_id)
-        embed = create_embed(f"📊 VPS Statistics - {container_name}", f"Resource usage statistics", 0x1a1a1a)
-        add_field(embed, "📈 Status", f"**{stats['status'].upper()}**", False)
-        add_field(embed, "💻 CPU Usage", f"**{stats['cpu']:.1f}%**", True)
-        add_field(embed, "🧠 Memory Usage", f"**{stats['ram']['used']}/{stats['ram']['total']} MB ({stats['ram']['pct']:.1f}%)**", True)
-        add_field(embed, "💾 Disk Usage", f"**{stats['disk']}**", True)
-        add_field(embed, "⏱️ Uptime", f"**{stats['uptime']}**", True)
+        embed = create_embed(f"ð VPS Statistics - {container_name}", f"Resource usage statistics", 0x1a1a1a)
+        add_field(embed, "ð Status", f"**{stats['status'].upper()}**", False)
+        add_field(embed, "ð» CPU Usage", f"**{stats['cpu']:.1f}%**", True)
+        add_field(embed, "ð§  Memory Usage", f"**{stats['ram']['used']}/{stats['ram']['total']} MB ({stats['ram']['pct']:.1f}%)**", True)
+        add_field(embed, "ð¾ Disk Usage", f"**{stats['disk']}**", True)
+        add_field(embed, "â±ï¸ Uptime", f"**{stats['uptime']}**", True)
         await ctx.send(embed=embed)
     except Exception as e:
         await ctx.send(embed=create_error_embed("Statistics Failed", f"Error: {str(e)}"))
@@ -4247,32 +6025,32 @@ async def node_check(ctx, node_id: int):
     
     # Check if node is reachable
     status = await get_node_status(node_id)
-    add_field(embed, "📡 Connection Status", status, False)
+    add_field(embed, "ð¡ Connection Status", status, False)
     
-    if status.startswith("🟢"):
+    if status.startswith("ð¢"):
         # Try to get storage pools
         try:
             pools_output = await execute_lxc("", "storage list", node_id=node_id, timeout=30)
-            add_field(embed, "💾 Available Storage Pools", f"```{pools_output}```", False)
+            add_field(embed, "ð¾ Available Storage Pools", f"```{pools_output}```", False)
             
             # Try to get default profile
             try:
                 profile_output = await execute_lxc("", "profile list", node_id=node_id, timeout=30)
-                add_field(embed, "📋 Available Profiles", f"```{profile_output[:500]}...```", False)
+                add_field(embed, "ð Available Profiles", f"```{profile_output[:500]}...```", False)
             except Exception as e:
-                add_field(embed, "📋 Profiles", f"Error: {str(e)[:200]}", False)
+                add_field(embed, "ð Profiles", f"Error: {str(e)[:200]}", False)
                 
         except Exception as e:
-            add_field(embed, "💾 Storage Pools", f"Error: {str(e)[:200]}", False)
+            add_field(embed, "ð¾ Storage Pools", f"Error: {str(e)[:200]}", False)
         
         # Check remote API endpoint
         try:
             test_response = requests.get(f"{node['url']}/api/ping", params={'api_key': node['api_key']}, timeout=5)
-            add_field(embed, "🔌 API Endpoint", f"✅ Reachable\nURL: {node['url']}", False)
+            add_field(embed, "ð API Endpoint", f"â Reachable\nURL: {node['url']}", False)
         except Exception as e:
-            add_field(embed, "🔌 API Endpoint", f"❌ Unreachable\nError: {str(e)[:200]}", False)
+            add_field(embed, "ð API Endpoint", f"â Unreachable\nError: {str(e)[:200]}", False)
     else:
-        add_field(embed, "⚠️ Status", "Node is offline or unreachable", False)
+        add_field(embed, "â ï¸ Status", "Node is offline or unreachable", False)
     
     await ctx.send(embed=embed)
 
@@ -4288,7 +6066,7 @@ async def vps_network(ctx, container_name: str, action: str, value: str = None):
             output = await execute_lxc(container_name, f"exec {container_name} -- ip addr", node_id=node_id)
             if len(output) > 1000:
                 output = output[:1000] + "\n... (truncated)"
-            embed = create_embed(f"🌐 Network Interfaces - {container_name}", "Network configuration", 0x1a1a1a)
+            embed = create_embed(f"ð Network Interfaces - {container_name}", "Network configuration", 0x1a1a1a)
             add_field(embed, "Interfaces", f"```\n{output}\n```", False)
             await ctx.send(embed=embed)
         elif action.lower() == "limit" and value:
@@ -4315,7 +6093,7 @@ async def vps_processes(ctx, container_name: str):
         output = await execute_lxc(container_name, f"exec {container_name} -- ps aux", node_id=node_id)
         if len(output) > 1000:
             output = output[:1000] + "\n... (truncated)"
-        embed = create_embed(f"⚙️ Processes - {container_name}", "Running processes", 0x1a1a1a)
+        embed = create_embed(f"âï¸ Processes - {container_name}", "Running processes", 0x1a1a1a)
         add_field(embed, "Process List", f"```\n{output}\n```", False)
         await ctx.send(embed=embed)
     except Exception as e:
@@ -4330,7 +6108,7 @@ async def vps_logs(ctx, container_name: str, lines: int = 50):
         output = await execute_lxc(container_name, f"exec {container_name} -- journalctl -n {lines}", node_id=node_id)
         if len(output) > 1000:
             output = output[:1000] + "\n... (truncated)"
-        embed = create_embed(f"📋 Logs - {container_name}", f"Last {lines} log lines", 0x1a1a1a)
+        embed = create_embed(f"ð Logs - {container_name}", f"Last {lines} log lines", 0x1a1a1a)
         add_field(embed, "System Logs", f"```\n{output}\n```", False)
         await ctx.send(embed=embed)
     except Exception as e:
@@ -4343,68 +6121,6 @@ async def vps_uptime(ctx, container_name: str):
     uptime = await get_container_uptime(container_name, node_id)
     embed = create_info_embed("VPS Uptime", f"Uptime for `{container_name}`: {uptime}")
     await ctx.send(embed=embed)
-
-@bot.command(name='vps-password')
-@is_admin()
-async def vps_password(ctx, container_name: str = None):
-    """View or manage VPS root passwords"""
-    if not container_name:
-        # Show all passwords for all VPS
-        password_list = []
-        for user_id, vps_list in vps_data.items():
-            try:
-                user = await bot.fetch_user(int(user_id))
-                for vps in vps_list:
-                    password = vps.get('root_password', 'Not Set')
-                    if password == 'Not Set':
-                        password_display = "❌ Not Set"
-                    else:
-                        password_display = f"🔐 `{password}`"
-                    password_list.append(f"**{user.name}** - `{vps['container_name']}`: {password_display}")
-            except:
-                pass
-        
-        if not password_list:
-            await ctx.send(embed=create_info_embed("No Passwords", "No VPS passwords found in database."))
-            return
-        
-        password_text = "\n".join(password_list)
-        chunks = [password_text[i:i+1024] for i in range(0, len(password_text), 1024)]
-        for idx, chunk in enumerate(chunks, 1):
-            embed = create_embed(f"🔐 VPS Root Passwords (Part {idx}/{len(chunks)})", "Root passwords for all VPS", 0xff6b6b)
-            add_field(embed, "Passwords", chunk, False)
-            add_field(embed, "⚠️ Security Notice", "These passwords are sensitive. Do not share them publicly.", False)
-            embed.set_footer(text=f"Made by Hopingboyz • Password Management")
-            await ctx.send(embed=embed)
-    else:
-        # Show password for specific VPS
-        found_vps = None
-        found_user = None
-        for user_id, vps_list in vps_data.items():
-            for vps in vps_list:
-                if vps['container_name'] == container_name:
-                    found_vps = vps
-                    found_user = await bot.fetch_user(int(user_id))
-                    break
-            if found_vps:
-                break
-        
-        if not found_vps:
-            await ctx.send(embed=create_error_embed("VPS Not Found", f"No VPS found with container name: `{container_name}`"))
-            return
-        
-        password = found_vps.get('root_password', 'Not Set')
-        if password == 'Not Set':
-            embed = create_info_embed("Password Not Set", f"VPS `{container_name}` does not have a stored password.")
-        else:
-            embed = create_success_embed("VPS Password", f"Root password for VPS `{container_name}`")
-            add_field(embed, "Owner", f"{found_user.mention}", True)
-            add_field(embed, "Container", f"`{container_name}`", True)
-            add_field(embed, "🔐 Password", f"`{password}`", False)
-            add_field(embed, "Usage", f"SSH as `root` with this password", False)
-        
-        embed.set_footer(text=f"Made by Hopingboyz • Password Information")
-        await ctx.send(embed=embed)
 
 @bot.command(name='suspend-vps')
 @is_admin()
@@ -4434,7 +6150,7 @@ async def suspend_vps(ctx, container_name: str, *, reason: str = "Admin action")
                     return
                 try:
                     owner = await bot.fetch_user(int(uid))
-                    embed = create_warning_embed("🚨 VPS Suspended", f"Your VPS `{container_name}` has been suspended by an admin.\n\n**Reason:** {reason}\n\nContact an admin to unsuspend.")
+                    embed = create_warning_embed("ð¨ VPS Suspended", f"Your VPS `{container_name}` has been suspended by an admin.\n\n**Reason:** {reason}\n\nContact an admin to unsuspend.")
                     await owner.send(embed=embed)
                 except Exception as dm_e:
                     logger.error(f"Failed to DM owner {uid}: {dm_e}")
@@ -4470,7 +6186,7 @@ async def unsuspend_vps(ctx, container_name: str):
                     await ctx.send(embed=create_error_embed("Start Failed", str(e)))
                 try:
                     owner = await bot.fetch_user(int(uid))
-                    embed = create_success_embed("🟢 VPS Unsuspended", f"Your VPS `{container_name}` has been unsuspended by an admin.\nYou can now manage it again.")
+                    embed = create_success_embed("ð¢ VPS Unsuspended", f"Your VPS `{container_name}` has been unsuspended by an admin.\nYou can now manage it again.")
                     await owner.send(embed=embed)
                 except Exception as dm_e:
                     logger.error(f"Failed to DM owner {uid} about unsuspension: {dm_e}")
@@ -4582,7 +6298,7 @@ async def resource_check(ctx):
                         save_vps_data()
                         try:
                             owner = await bot.fetch_user(int(user_id))
-                            warn_embed = create_warning_embed("🚨 VPS Auto-Suspended", f"Your VPS `{container}` has been suspended due to high resource usage.\n\n**Reason:** {reason}\n\nContact admin to unsuspend and address the issue.")
+                            warn_embed = create_warning_embed("ð¨ VPS Auto-Suspended", f"Your VPS `{container}` has been suspended due to high resource usage.\n\n**Reason:** {reason}\n\nContact admin to unsuspend and address the issue.")
                             await owner.send(embed=warn_embed)
                         except Exception as dm_e:
                             logger.error(f"Failed to DM owner {user_id}: {dm_e}")
@@ -4617,19 +6333,62 @@ async def whitelist_vps(ctx, container_name: str, action: str):
     if not found:
         await ctx.send(embed=create_error_embed("Not Found", f"VPS `{container_name}` not found."))
 
-@bot.command(name='backup-db')
+@bot.command(name='snapshot')
 @is_admin()
-async def backup_db(ctx):
-    backup_name = os.path.join(BASE_DIR, f"vps_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
+async def snapshot_vps(ctx, container_name: str, snap_name: str = "snap0"):
+    node_id = find_node_id_for_container(container_name)
+    await ctx.send(embed=create_info_embed("Creating Snapshot", f"Creating snapshot '{snap_name}' for `{container_name}`..."))
     try:
-        shutil.copy(DB_PATH, backup_name)
-        if os.path.exists(f"{DB_PATH}-wal"):
-            shutil.copy(f"{DB_PATH}-wal", f"{backup_name}-wal")
-        if os.path.exists(f"{DB_PATH}-shm"):
-            shutil.copy(f"{DB_PATH}-shm", f"{backup_name}-shm")
-        await ctx.send(embed=create_success_embed("DB Backup Created", f"Backup saved as `{backup_name}` (and WAL/SHM if applicable)."))
+        await execute_lxc(container_name, f"snapshot {container_name} {snap_name}", node_id=node_id)
+        await ctx.send(embed=create_success_embed("Snapshot Created", f"Snapshot '{snap_name}' created for VPS `{container_name}`."))
     except Exception as e:
-        await ctx.send(embed=create_error_embed("Backup Failed", f"Error: {str(e)}"))
+        await ctx.send(embed=create_error_embed("Snapshot Failed", f"Error: {str(e)}"))
+
+@bot.command(name='list-snapshots')
+@is_admin()
+async def list_snapshots(ctx, container_name: str):
+    node_id = find_node_id_for_container(container_name)
+    try:
+        result = await execute_lxc(container_name, f"snapshot list {container_name}", node_id=node_id)
+        embed = create_info_embed(f"Snapshots for {container_name}", result)
+        await ctx.send(embed=embed)
+    except Exception as e:
+        await ctx.send(embed=create_error_embed("List Failed", f"Error: {str(e)}"))
+
+@bot.command(name='restore-snapshot')
+@is_admin()
+async def restore_snapshot(ctx, container_name: str, snap_name: str):
+    node_id = find_node_id_for_container(container_name)
+    await ctx.send(embed=create_warning_embed("Restore Snapshot", f"Restoring snapshot '{snap_name}' for `{container_name}` will overwrite current state. Continue?"))
+    class RestoreConfirm(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=60)
+
+        @discord.ui.button(label="Confirm Restore", style=discord.ButtonStyle.danger)
+        async def confirm(self, inter: discord.Interaction, item: discord.ui.Button):
+            await inter.response.defer()
+            try:
+                await execute_lxc(container_name, f"stop {container_name}", node_id=node_id)
+                await execute_lxc(container_name, f"restore {container_name} {snap_name}", node_id=node_id)
+                await execute_lxc(container_name, f"start {container_name}", node_id=node_id)
+                await apply_internal_permissions(container_name, node_id)
+                await recreate_port_forwards(container_name)
+                for uid, lst in vps_data.items():
+                    for vps in lst:
+                        if vps['container_name'] == container_name:
+                            vps['status'] = 'running'
+                            vps['suspended'] = False
+                            save_vps_data()
+                            break
+                await inter.followup.send(embed=create_success_embed("Snapshot Restored", f"Restored '{snap_name}' for VPS `{container_name}`."))
+            except Exception as e:
+                await inter.followup.send(embed=create_error_embed("Restore Failed", f"Error: {str(e)}"))
+
+        @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+        async def cancel(self, inter: discord.Interaction, item: discord.ui.Button):
+            await inter.response.edit_message(embed=create_info_embed("Cancelled", "Snapshot restore cancelled."))
+
+    await ctx.send(view=RestoreConfirm())
 
 @bot.command(name='repair-ports')
 @is_admin()
@@ -4641,256 +6400,2479 @@ async def repair_ports(ctx, container_name: str):
     except Exception as e:
         await ctx.send(embed=create_error_embed("Repair Failed", f"Error: {str(e)}"))
 
-@bot.command(name='set-expiration')
-@is_admin()
-async def set_expiration(ctx, container_name: str, days: int):
-    """Set VPS expiration date (admin only)"""
-    if days <= 0:
-        await ctx.send(embed=create_error_embed("Invalid Days", "Days must be a positive number."))
-        return
-    
-    found_vps = None
-    user_id = None
-    vps_index = None
-    
-    for uid, vps_list in vps_data.items():
-        for i, vps in enumerate(vps_list):
-            if vps['container_name'] == container_name:
-                found_vps = vps
-                user_id = uid
-                vps_index = i
-                break
-        if found_vps:
-            break
-    
-    if not found_vps:
-        await ctx.send(embed=create_error_embed("VPS Not Found", f"No VPS found with container name: `{container_name}`"))
-        return
-    
-    # Calculate expiration date
-    expiration_date = (datetime.now() + timedelta(days=days)).isoformat()
-    found_vps['expiration_date'] = expiration_date
-    vps_data[user_id][vps_index] = found_vps
-    save_vps_data()
-    
-    # Get owner info
-    try:
-        owner = await bot.fetch_user(int(user_id))
-        owner_mention = owner.mention
-    except:
-        owner_mention = f"User {user_id}"
-    
-    embed = create_success_embed("Expiration Date Set", 
-        f"VPS `{container_name}` expiration date set for {days} days from now")
-    add_field(embed, "Owner", owner_mention, True)
-    add_field(embed, "Expires On", datetime.fromisoformat(expiration_date).strftime('%Y-%m-%d %H:%M:%S'), True)
-    add_field(embed, "Days Remaining", str(days), True)
-    
-    await ctx.send(embed=embed)
-    
-    # Notify owner
-    try:
-        owner = await bot.fetch_user(int(user_id))
-        dm_embed = create_info_embed("⏰ VPS Expiration Date Set",
-            f"Your VPS `{container_name}` will expire in {days} days.\n\n"
-            f"**Expires:** {datetime.fromisoformat(expiration_date).strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-            f"Contact admin to renew your VPS before it expires.")
-        await owner.send(embed=dm_embed)
-    except:
-        pass
-
-@bot.command(name='renew-vps')
-@is_admin()
-async def renew_vps(ctx, container_name: str, additional_days: int = None):
-    """Renew VPS expiration date (admin only)"""
-    if additional_days is None:
-        additional_days = DEFAULT_VPS_EXPIRATION_DAYS
-    
-    if additional_days <= 0:
-        await ctx.send(embed=create_error_embed("Invalid Days", "Days must be a positive number."))
-        return
-    
-    found_vps = None
-    user_id = None
-    vps_index = None
-    
-    for uid, vps_list in vps_data.items():
-        for i, vps in enumerate(vps_list):
-            if vps['container_name'] == container_name:
-                found_vps = vps
-                user_id = uid
-                vps_index = i
-                break
-        if found_vps:
-            break
-    
-    if not found_vps:
-        await ctx.send(embed=create_error_embed("VPS Not Found", f"No VPS found with container name: `{container_name}`"))
-        return
-    
-    # Get current expiration or use today
-    if found_vps.get('expiration_date'):
-        current_expiration = datetime.fromisoformat(found_vps['expiration_date'])
-    else:
-        current_expiration = datetime.now()
-    
-    # Calculate new expiration date
-    new_expiration_date = (current_expiration + timedelta(days=additional_days)).isoformat()
-    found_vps['expiration_date'] = new_expiration_date
-    
-    # Unsuspend if it was suspended due to expiration
-    if found_vps.get('suspended', False):
-        found_vps['suspended'] = False
-    
-    vps_data[user_id][vps_index] = found_vps
-    save_vps_data()
-    
-    # Get owner info
-    try:
-        owner = await bot.fetch_user(int(user_id))
-        owner_mention = owner.mention
-    except:
-        owner_mention = f"User {user_id}"
-    
-    embed = create_success_embed("VPS Renewed", 
-        f"VPS `{container_name}` has been renewed")
-    add_field(embed, "Owner", owner_mention, True)
-    add_field(embed, "Added Days", str(additional_days), True)
-    add_field(embed, "Previous Expiration", current_expiration.strftime('%Y-%m-%d %H:%M:%S'), True)
-    add_field(embed, "New Expiration", datetime.fromisoformat(new_expiration_date).strftime('%Y-%m-%d %H:%M:%S'), True)
-    
-    await ctx.send(embed=embed)
-    
-    # Notify owner
-    try:
-        owner = await bot.fetch_user(int(user_id))
-        dm_embed = create_success_embed("✅ VPS Renewed",
-            f"Your VPS `{container_name}` has been renewed!\n\n"
-            f"**New Expiration:** {datetime.fromisoformat(new_expiration_date).strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-            f"Thank you for using {BOT_NAME}!")
-        await owner.send(embed=dm_embed)
-    except:
-        pass
-
-@bot.command(name='vps-expiration')
-@is_admin()
-async def check_expiration(ctx, container_name: str = None):
-    """Check VPS expiration status (admin only)"""
-    if container_name:
-        # Check specific VPS
-        found_vps = None
-        user_id = None
-        
-        for uid, vps_list in vps_data.items():
-            for vps in vps_list:
-                if vps['container_name'] == container_name:
-                    found_vps = vps
-                    user_id = uid
-                    break
-            if found_vps:
-                break
-        
-        if not found_vps:
-            await ctx.send(embed=create_error_embed("VPS Not Found", f"No VPS found with container name: `{container_name}`"))
-            return
-        
-        # Get owner info
-        try:
-            owner = await bot.fetch_user(int(user_id))
-            owner_mention = owner.mention
-        except:
-            owner_mention = f"User {user_id}"
-        
-        embed = create_info_embed("VPS Expiration Status", f"Details for `{container_name}`")
-        add_field(embed, "Owner", owner_mention, True)
-        add_field(embed, "Container", f"`{container_name}`", True)
-        
-        if found_vps.get('expiration_date'):
-            expiration_dt = datetime.fromisoformat(found_vps['expiration_date'])
-            days_remaining = (expiration_dt - datetime.now()).days
-            
-            if days_remaining < 0:
-                status = "🔴 EXPIRED"
-                color = 0xff3366
-            elif days_remaining <= EXPIRATION_WARNING_DAYS:
-                status = "🟡 EXPIRING SOON"
-                color = 0xffaa00
-            else:
-                status = "🟢 ACTIVE"
-                color = 0x00ff88
-            
-            embed.color = color
-            add_field(embed, "Status", status, True)
-            add_field(embed, "Expiration Date", expiration_dt.strftime('%Y-%m-%d %H:%M:%S'), True)
-            add_field(embed, "Days Remaining", str(max(0, days_remaining)), True)
-        else:
-            add_field(embed, "Status", "🔵 NO EXPIRATION SET", False)
-        
-        await ctx.send(embed=embed)
-    else:
-        # List all VPS with expiration status
-        embed = create_info_embed("📋 All VPS Expiration Status", "Global expiration overview")
-        
-        expiring_soon = []
-        expired = []
-        active = []
-        no_expiration = []
-        
-        for user_id, vps_list in vps_data.items():
-            try:
-                owner = await bot.fetch_user(int(user_id))
-                owner_name = owner.name
-            except:
-                owner_name = f"Unknown ({user_id})"
-            
-            for vps in vps_list:
-                if vps.get('expiration_date'):
-                    expiration_dt = datetime.fromisoformat(vps['expiration_date'])
-                    days_remaining = (expiration_dt - datetime.now()).days
-                    
-                    status_line = f"**{owner_name}** - `{vps['container_name']}`\n" \
-                                 f"Expires: {expiration_dt.strftime('%Y-%m-%d')} ({days_remaining} days)"
-                    
-                    if days_remaining < 0:
-                        expired.append(status_line)
-                    elif days_remaining <= EXPIRATION_WARNING_DAYS:
-                        expiring_soon.append(status_line)
-                    else:
-                        active.append(status_line)
-                else:
-                    no_expiration.append(f"**{owner_name}** - `{vps['container_name']}`")
-        
-        if expiring_soon:
-            add_field(embed, "🟡 Expiring Soon", "\n\n".join(expiring_soon), False)
-        if expired:
-            add_field(embed, "🔴 Expired", "\n\n".join(expired), False)
-        if active:
-            add_field(embed, "🟢 Active", "\n\n".join(active[:10]), False)
-            if len(active) > 10:
-                add_field(embed, "Note", f"Showing 10 of {len(active)} active VPS", False)
-        if no_expiration:
-            add_field(embed, "🔵 No Expiration Set", "\n".join(no_expiration[:5]), False)
-            if len(no_expiration) > 5:
-                add_field(embed, "Note", f"Total {len(no_expiration)} VPS without expiration date", False)
-        
-        await ctx.send(embed=embed)
-
 @bot.command(name='about')
 async def about(ctx):
+    """Display bot information with premium branding"""
     total_users = len(vps_data)
     total_vps = sum(len(vps_list) for vps_list in vps_data.values())
     latency = round(bot.latency * 1000)
     main_admin = await bot.fetch_user(MAIN_ADMIN_ID)
-    embed = create_info_embed(f"About {BOT_NAME}", f"Bot information and statistics")
-    add_field(embed, "Bot Name", BOT_NAME, True)
-    add_field(embed, "Main Owner", main_admin.mention, True)
-    add_field(embed, "Developer", BOT_DEVELOPER, True)
-    add_field(embed, "Ping", f"{latency}ms", True)
-    add_field(embed, "Version", BOT_VERSION, True)
-    add_field(embed, "Total VPS", str(total_vps), True)
-    add_field(embed, "Total Users", str(total_users), True)
+    
+    # Premium branded embed
+    embed = create_premium_embed(
+        f"{BOT_NAME} VPS Manager",
+        "Professional VPS management platform for Discord communities"
+    )
+    
+    embed.set_thumbnail(url="https://i.imgur.com/dpatuSj.png")
+    
+    # Bot information
+    add_field(embed, "Platform", f"```{BOT_NAME}```", True)
+    add_field(embed, "Version", f"```v{BOT_VERSION}```", True)
+    add_field(embed, "Status", format_status_badge(True, "Online"), True)
+    
+    # Performance metrics
+    if latency < 100:
+        latency_status = "ð¢ Excellent"
+    elif latency < 200:
+        latency_status = "ð¡ Good"
+    else:
+        latency_status = "ð´ Poor"
+    
+    add_field(embed, "Latency", f"```{latency}ms``` {latency_status}", True)
+    add_field(embed, "Uptime", f"```{get_uptime()}```", True)
+    add_field(embed, "Server", f"```{YOUR_SERVER_IP}```", True)
+    
+    # Statistics
+    stats_text = (
+        f"{format_list_item(f'Total VPS: {total_vps}')} ð¥ï¸\n"
+        f"{format_list_item(f'Active Users: {total_users}')} ð¥\n"
+        f"{format_list_item(f'Commands: 100+')} â¡"
+    )
+    add_field(embed, "Statistics", stats_text, False)
+    
+    # Team
+    add_field(embed, "Owner", main_admin.mention, True)
+    add_field(embed, "Developer", f"```{BOT_DEVELOPER}```", True)
+    add_field(embed, "Support", f"`{PREFIX}help`", True)
+    
+    # Features highlight
+    features_text = (
+        f"{EmbedIcons.BULLET} Multi-node VPS management\n"
+        f"{EmbedIcons.BULLET} Advanced economy system\n"
+        f"{EmbedIcons.BULLET} Port forwarding & networking\n"
+        f"{EmbedIcons.BULLET} Real-time monitoring\n"
+        f"{EmbedIcons.BULLET} Premium UI/UX design"
+    )
+    add_field(embed, "Key Features", features_text, False)
+    
     await ctx.send(embed=embed)
 
+
+# ============================================
+# COINS & ECONOMY COMMANDS
+# ============================================
+
+@bot.command(name='balance', aliases=['bal', 'coins', 'wallet'])
+async def balance(ctx, user: discord.Member = None):
+    """Check coin balance with premium card design"""
+    target_user = user or ctx.author
+    user_id = str(target_user.id)
+    
+    # Run blocking database operation in executor
+    coins_data = await run_in_executor(get_user_coins, user_id)
+    
+    # Premium gold card design
+    embed = create_card_embed(
+        "Coin Wallet",
+        f"Financial overview for {target_user.mention}",
+        color=EmbedColors.GOLD
+    )
+    
+    # Main balance - prominent display
+    balance_display = f"```\n{coins_data['balance']:,} coins\n```"
+    add_field(embed, "ð° Current Balance", balance_display, False)
+    
+    # Financial metrics in a row
+    add_field(embed, "ï¿½ Total Earned", f"```{coins_data['total_earned']:,}```", True)
+    add_field(embed, "ð Total Spent", f"```{coins_data['total_spent']:,}```", True)
+    add_field(embed, "ðµ Net Worth", f"```{coins_data['balance']:,}```", True)
+    
+    # Activity statistics
+    invite_count = coins_data['invite_count']
+    message_count = coins_data['message_count']
+    voice_minutes = coins_data['voice_minutes']
+    
+    activity_text = (
+        f"{format_list_item(f'Invites: {invite_count}')} ð¥\n"
+        f"{format_list_item(f'Messages: {message_count}')} ð¬\n"
+        f"{format_list_item(f'Voice Time: {voice_minutes} min')} ð¤"
+    )
+    add_field(embed, "Activity Stats", activity_text, False)
+    
+    # Quick actions
+    actions_text = (
+        f"`{PREFIX}daily` {EmbedIcons.ARROW} Claim daily reward\n"
+        f"`{PREFIX}work` {EmbedIcons.ARROW} Work for coins\n"
+        f"`{PREFIX}shop` {EmbedIcons.ARROW} Browse coin shop\n"
+        f"`{PREFIX}profile` {EmbedIcons.ARROW} View full profile"
+    )
+    add_field(embed, "Quick Actions", actions_text, False)
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='daily')
+async def daily_reward(ctx):
+    """Claim daily coin reward with streak bonus"""
+    user_id = str(ctx.author.id)
+    
+    # SECURITY: Check if user is restricted
+    if is_user_restricted(user_id):
+        await ctx.send(embed=create_error_embed("â Access Restricted",
+            "Your account has been restricted from earning coins due to suspicious activity.\n"
+            "Contact an administrator for more information."))
+        return
+    
+    # SECURITY: Rate limit check (should only claim once per 24h, but check for spam)
+    allowed, remaining = check_rate_limit(user_id, 'daily_claim', 2, 1440)  # Max 2 attempts per 24h
+    if not allowed:
+        log_security_event(user_id, 'daily_spam',
+                         'Excessive daily claim attempts',
+                         'medium')
+        await ctx.send(embed=create_error_embed("â° Slow Down",
+            "You're trying to claim too frequently. Please wait before trying again."))
+        return
+    
+    # Run blocking database operations in executor
+    def process_daily():
+        conn = None
+        try:
+            # SINGLE DATABASE CONNECTION for entire operation
+            conn = get_db()
+            cur = conn.cursor()
+            
+            # Get settings
+            cur.execute('SELECT value FROM settings WHERE key = ?', ('coins_daily_reward',))
+            row = cur.fetchone()
+            base_reward = int(row[0]) if row else 100
+            
+            cur.execute('SELECT value FROM settings WHERE key = ?', ('streak_bonus_multiplier',))
+            row = cur.fetchone()
+            streak_bonus_mult = float(row[0]) if row else 0.1
+            
+            cur.execute('SELECT value FROM settings WHERE key = ?', ('max_streak_bonus',))
+            row = cur.fetchone()
+            max_bonus = float(row[0]) if row else 2.0
+            
+            # Get user coins data
+            cur.execute('SELECT * FROM user_coins WHERE user_id = ?', (user_id,))
+            coins_row = cur.fetchone()
+            
+            if not coins_row:
+                # Create new user
+                cur.execute('''INSERT INTO user_coins (user_id, balance, total_earned, total_spent, created_at)
+                               VALUES (?, 0, 0, 0, ?)''', (user_id, datetime.now().isoformat()))
+                last_daily = None
+            else:
+                last_daily = coins_row['last_daily']
+            
+            # Check if already claimed today
+            if last_daily:
+                last_claim = datetime.fromisoformat(last_daily)
+                if (datetime.now() - last_claim).total_seconds() < 86400:  # 24 hours
+                    time_left = 86400 - (datetime.now() - last_claim).total_seconds()
+                    hours = int(time_left // 3600)
+                    minutes = int((time_left % 3600) // 60)
+                    conn.close()
+                    return False, hours, minutes, None, None, None
+            
+            # Update streak (inline to avoid nested connection)
+            cur.execute('SELECT * FROM user_streaks WHERE user_id = ?', (user_id,))
+            streak_row = cur.fetchone()
+            
+            today = datetime.now().date().isoformat()
+            
+            if not streak_row:
+                # Create new streak
+                current_streak = 1
+                longest_streak = 1
+                bonus_multiplier = 1.0
+                cur.execute('''INSERT INTO user_streaks 
+                               (user_id, current_streak, longest_streak, last_claim_date, streak_bonus_multiplier)
+                               VALUES (?, 1, 1, ?, 1.0)''', (user_id, today))
+            else:
+                last_claim = streak_row['last_claim_date']
+                current_streak = streak_row['current_streak']
+                longest_streak = streak_row['longest_streak']
+                
+                yesterday = (datetime.now().date() - timedelta(days=1)).isoformat()
+                
+                if last_claim == yesterday:
+                    # Continue streak
+                    current_streak += 1
+                    longest_streak = max(longest_streak, current_streak)
+                elif last_claim != today:
+                    # Streak broken
+                    current_streak = 1
+                
+                # Calculate bonus multiplier
+                bonus_multiplier = min(1.0 + (current_streak * streak_bonus_mult), max_bonus)
+                
+                cur.execute('''UPDATE user_streaks 
+                               SET current_streak = ?, longest_streak = ?, last_claim_date = ?, 
+                                   streak_bonus_multiplier = ?
+                               WHERE user_id = ?''',
+                           (current_streak, longest_streak, today, bonus_multiplier, user_id))
+            
+            streak_data = {
+                'current_streak': current_streak,
+                'longest_streak': longest_streak,
+                'bonus_multiplier': bonus_multiplier
+            }
+            
+            # Calculate reward with streak bonus
+            total_reward = int(base_reward * bonus_multiplier)
+            
+            # Award daily coins (inline to avoid nested connection)
+            cur.execute('''INSERT OR IGNORE INTO user_coins (user_id, balance, total_earned, total_spent, created_at)
+                           VALUES (?, 0, 0, 0, ?)''', (user_id, datetime.now().isoformat()))
+            
+            cur.execute('''UPDATE user_coins 
+                           SET balance = balance + ?, 
+                               total_earned = total_earned + ?,
+                               last_daily = ?
+                           WHERE user_id = ?''', 
+                       (total_reward, total_reward, datetime.now().isoformat(), user_id))
+            
+            # Log transaction
+            cur.execute('''INSERT INTO coin_transactions (user_id, amount, type, description, created_at)
+                           VALUES (?, ?, ?, ?, ?)''',
+                       (user_id, total_reward, 'daily', 
+                        f'Daily reward (Day {current_streak})', datetime.now().isoformat()))
+            
+            # Get new balance
+            cur.execute('SELECT balance FROM user_coins WHERE user_id = ?', (user_id,))
+            new_balance = cur.fetchone()[0]
+            
+            conn.close()
+            
+            return True, base_reward, bonus_multiplier, streak_data, new_balance, None
+            
+        except Exception as e:
+            if conn:
+                conn.close()
+            logger.error(f"Error in process_daily: {e}")
+            return False, 0, 0, None, None, str(e)
+    
+    try:
+        result = await run_in_executor(process_daily)
+        
+        if not result[0]:
+            _, hours, minutes, _, _, error = result
+            if error:
+                embed = create_error_embed("â Error", f"An error occurred: {error}")
+            else:
+                embed = create_warning_embed("â° Daily Reward", 
+                    f"You've already claimed your daily reward!\n"
+                    f"Come back in **{hours}h {minutes}m**")
+            await ctx.send(embed=embed)
+            return
+        
+        _, base_reward, streak_bonus, streak_data, new_balance, _ = result
+        
+        total_reward = int(base_reward * streak_bonus)
+        
+        embed = create_success_embed("ð Daily Reward Claimed!", 
+            f"**Base Reward:** {base_reward} coins\n"
+            f"**Streak Bonus:** {int((streak_bonus - 1) * 100)}% (Day {streak_data['current_streak']} ð¥)\n"
+            f"**Total Earned:** {total_reward:,} coins\n"
+            f"**New Balance:** {new_balance:,} coins\n\n"
+            f"**Longest Streak:** {streak_data['longest_streak']} days")
+        
+        add_field(embed, "ð¡ Tip", 
+            f"Claim daily to build your streak and earn more coins!\n"
+            f"Next claim: Tomorrow at this time", False)
+        
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        logger.error(f"Error in daily_reward command: {e}")
+        embed = create_error_embed("â Error", "An error occurred while processing your daily reward. Please try again.")
+        await ctx.send(embed=embed)
+
+@bot.command(name='leaderboard', aliases=['lb', 'top'])
+async def leaderboard(ctx):
+    """Show coin leaderboard"""
+    limit = int(get_setting('leaderboard_top_count', 10))
+    
+    # Run blocking database operations in executor
+    def get_leaderboard_data():
+        top_users = get_coin_leaderboard(limit)
+        user_id = str(ctx.author.id)
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute('''SELECT COUNT(*) + 1 FROM user_coins 
+                       WHERE balance > (SELECT balance FROM user_coins WHERE user_id = ?)''',
+                   (user_id,))
+        user_rank = cur.fetchone()[0]
+        user_coins = get_user_coins(user_id)
+        conn.close()
+        return top_users, user_rank, user_coins
+    
+    top_users, user_rank, user_coins = await run_in_executor(get_leaderboard_data)
+    
+    embed = create_embed("ð Coin Leaderboard", f"Top {limit} richest users", 0xf1c40f)
+    
+    if not top_users:
+        add_field(embed, "No Data", "No users have earned coins yet!", False)
+    else:
+        leaderboard_text = []
+        medals = ["ð¥", "ð¥", "ð¥"]
+        
+        for idx, user_data in enumerate(top_users, 1):
+            try:
+                user = await bot.fetch_user(int(user_data['user_id']))
+                medal = medals[idx-1] if idx <= 3 else f"**{idx}.**"
+                leaderboard_text.append(
+                    f"{medal} {user.name} - **{user_data['balance']:,} coins**\n"
+                    f"   â³ Earned: {user_data['total_earned']:,} | "
+                    f"Invites: {user_data['invite_count']} | "
+                    f"Messages: {user_data['message_count']}"
+                )
+            except:
+                pass
+        
+        add_field(embed, "Top Users", "\n\n".join(leaderboard_text), False)
+    
+    # Show user's rank if not in top
+    if user_rank > limit:
+        add_field(embed, "Your Rank", 
+            f"**#{user_rank}** - {user_coins['balance']:,} coins", False)
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='transactions', aliases=['history', 'txn'])
+async def transactions(ctx, limit: int = 10):
+    """View recent coin transactions"""
+    user_id = str(ctx.author.id)
+    
+    if limit > 20:
+        limit = 20
+    
+    # Run blocking database operation in executor
+    txns = await run_in_executor(get_user_transactions, user_id, limit)
+    
+    embed = create_info_embed("ð Transaction History", 
+        f"Last {len(txns)} transactions for {ctx.author.mention}")
+    
+    if not txns:
+        add_field(embed, "No Transactions", "You haven't earned or spent any coins yet!", False)
+    else:
+        txn_text = []
+        for txn in txns:
+            amount = txn['amount']
+            emoji = "â" if amount > 0 else "â"
+            color = "+" if amount > 0 else ""
+            created = datetime.fromisoformat(txn['created_at']).strftime('%m/%d %H:%M')
+            
+            txn_text.append(
+                f"{emoji} **{color}{amount:,} coins** - {txn['type']}\n"
+                f"   â³ {txn['description'] or 'No description'} ({created})"
+            )
+        
+        add_field(embed, "Recent Transactions", "\n\n".join(txn_text[:10]), False)
+        
+        if len(txns) > 10:
+            add_field(embed, "Note", f"Showing 10 of {len(txns)} transactions", False)
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='renew')
+async def renew_vps_command(ctx, vps_number: int = None, days: int = 1):
+    """Renew your VPS using coins"""
+    user_id = str(ctx.author.id)
+    
+    if vps_number is None:
+        await ctx.send(embed=create_error_embed("Usage", 
+            f"Usage: `{PREFIX}renew <vps_number> [days]`\n"
+            f"Example: `{PREFIX}renew 1 7` (renew VPS #1 for 7 days)"))
+        return
+    
+    if days < 1 or days > 365:
+        await ctx.send(embed=create_error_embed("Invalid Duration", 
+            "Days must be between 1 and 365"))
+        return
+    
+    # Get user's VPS
+    vps_list = vps_data.get(user_id, [])
+    if vps_number < 1 or vps_number > len(vps_list):
+        await ctx.send(embed=create_error_embed("Invalid VPS", 
+            f"You don't have VPS #{vps_number}. Use `{PREFIX}myvps` to see your VPS."))
+        return
+    
+    vps = vps_list[vps_number - 1]
+    
+    # Calculate cost
+    cost_per_day = int(get_setting('coins_vps_renewal_1day', 50))
+    total_cost = cost_per_day * days
+    
+    # Check if user has enough coins - run in executor
+    coins_data = await run_in_executor(get_user_coins, user_id)
+    if coins_data['balance'] < total_cost:
+        needed = total_cost - coins_data['balance']
+        await ctx.send(embed=create_error_embed("Insufficient Coins", 
+            f"You need **{total_cost:,} coins** to renew for {days} day(s).\n"
+            f"You have: **{coins_data['balance']:,} coins**\n"
+            f"You need: **{needed:,} more coins**\n\n"
+            f"Use `{PREFIX}coinhelp` to see how to earn coins!"))
+        return
+    
+    # Confirm renewal
+    embed = create_warning_embed("ð° Confirm VPS Renewal", 
+        f"**VPS:** `{vps['container_name']}`\n"
+        f"**Duration:** {days} day(s)\n"
+        f"**Cost:** {total_cost:,} coins\n"
+        f"**Your Balance:** {coins_data['balance']:,} coins\n"
+        f"**After Renewal:** {coins_data['balance'] - total_cost:,} coins\n\n"
+        f"React with â to confirm or â to cancel")
+    
+    msg = await ctx.send(embed=embed)
+    await msg.add_reaction("â")
+    await msg.add_reaction("â")
+    
+    def check(reaction, user):
+        return user == ctx.author and str(reaction.emoji) in ["â", "â"] and reaction.message.id == msg.id
+    
+    try:
+        reaction, user = await bot.wait_for('reaction_add', timeout=30.0, check=check)
+        
+        if str(reaction.emoji) == "â":
+            await msg.edit(embed=create_info_embed("Cancelled", "VPS renewal cancelled."))
+            return
+        
+        # Process renewal - run in executor
+        def process_renewal():
+            success, new_balance = remove_coins(user_id, total_cost, 'vps_renewal', 
+                                               f"Renewed VPS #{vps_number} for {days} days")
+            return success, new_balance
+        
+        success, new_balance = await run_in_executor(process_renewal)
+        
+        if not success:
+            await msg.edit(embed=create_error_embed("Error", "Failed to process payment."))
+            return
+        
+        # Renew VPS
+        vps_id = vps.get('id')
+        if vps_id:
+            renew_vps(vps_id, days)
+            
+            # Update VPS data
+            if vps.get('expires_at'):
+                current_expiry = datetime.fromisoformat(vps['expires_at'])
+                if current_expiry < datetime.now():
+                    current_expiry = datetime.now()
+            else:
+                current_expiry = datetime.now()
+            
+            new_expiry = current_expiry + timedelta(days=days)
+            vps['expires_at'] = new_expiry.isoformat()
+            vps['duration_days'] = vps.get('duration_days', 0) + days
+            
+            # Unsuspend if suspended due to expiration
+            if vps.get('suspended'):
+                vps['suspended'] = False
+                vps['status'] = 'stopped'  # User can start it manually
+            
+            save_vps_data()
+            
+            success_embed = create_success_embed("â VPS Renewed Successfully!", 
+                f"**VPS:** `{vps['container_name']}`\n"
+                f"**Extended by:** {days} day(s)\n"
+                f"**New Expiry:** {new_expiry.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"**Cost:** {total_cost:,} coins\n"
+                f"**New Balance:** {new_balance:,} coins\n\n"
+                f"Your VPS has been renewed! ð")
+            
+            await msg.edit(embed=success_embed)
+            
+    except asyncio.TimeoutError:
+        await msg.edit(embed=create_info_embed("Timeout", "Renewal request timed out."))
+
+@bot.command(name='admin-renew', aliases=['arenew', 'set-expiry', 'extend-vps'])
+@is_admin()
+async def admin_renew_vps(ctx, user: discord.Member, vps_number: int, days: int):
+    """Admin command to set/extend VPS expiry without coins"""
+    
+    if days < 1 or days > 365:
+        await ctx.send(embed=create_error_embed("Invalid Duration", 
+            "Days must be between 1 and 365"))
+        return
+    
+    user_id = str(user.id)
+    
+    # Get user's VPS
+    vps_list = vps_data.get(user_id, [])
+    if not vps_list:
+        await ctx.send(embed=create_error_embed("No VPS Found", 
+            f"{user.mention} doesn't have any VPS."))
+        return
+    
+    if vps_number < 1 or vps_number > len(vps_list):
+        await ctx.send(embed=create_error_embed("Invalid VPS", 
+            f"{user.mention} doesn't have VPS #{vps_number}.\n"
+            f"They have {len(vps_list)} VPS total."))
+        return
+    
+    vps = vps_list[vps_number - 1]
+    container_name = vps['container_name']
+    
+    # Calculate new expiry
+    if vps.get('expires_at'):
+        current_expiry = datetime.fromisoformat(vps['expires_at'])
+        if current_expiry < datetime.now():
+            # If expired, start from now
+            base_time = datetime.now()
+        else:
+            # If not expired, extend from current expiry
+            base_time = current_expiry
+    else:
+        # No expiry set, start from now
+        base_time = datetime.now()
+    
+    new_expiry = base_time + timedelta(days=days)
+    
+    # Update VPS data
+    vps['expires_at'] = new_expiry.isoformat()
+    vps['duration_days'] = vps.get('duration_days', 0) + days
+    
+    # Unsuspend if suspended due to expiration
+    was_suspended = vps.get('suspended', False)
+    if was_suspended:
+        vps['suspended'] = False
+        vps['status'] = 'stopped'  # User can start it manually
+    
+    save_vps_data()
+    
+    # Update in database if VPS has ID
+    vps_id = vps.get('id')
+    if vps_id:
+        try:
+            renew_vps(vps_id, days)
+        except Exception as e:
+            logger.warning(f"Failed to update VPS expiry in database: {e}")
+    
+    # Get expiry info for display
+    expiry_info = format_expiry_time(new_expiry.isoformat())
+    
+    # Create success embed
+    embed = create_success_embed("â VPS Expiry Updated (Admin)", 
+        f"**User:** {user.mention}\n"
+        f"**VPS:** `{container_name}` (#{vps_number})\n"
+        f"**Extended by:** {days} day(s)\n"
+        f"**New Expiry:** {new_expiry.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"**Status:** {expiry_info['text']}\n"
+        f"**Total Duration:** {vps.get('duration_days', 0)} days")
+    
+    if was_suspended:
+        add_field(embed, "ð Unsuspended", 
+            "VPS was suspended and has been unsuspended.\n"
+            f"User can start it with `{PREFIX}manage`", False)
+    
+    add_field(embed, "ð¡ Note", 
+        "This renewal was done by admin (no coins charged)", False)
+    
+    await ctx.send(embed=embed)
+    
+    # Try to DM the user
+    try:
+        dm_embed = create_success_embed("ð VPS Extended by Admin!", 
+            f"An admin has extended your VPS!\n\n"
+            f"**VPS:** `{container_name}` (#{vps_number})\n"
+            f"**Extended by:** {days} day(s)\n"
+            f"**New Expiry:** {new_expiry.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"**Status:** {expiry_info['text']}")
+        
+        if was_suspended:
+            add_field(dm_embed, "ð Unsuspended", 
+                f"Your VPS was unsuspended! Use `{PREFIX}manage` to start it.", False)
+        
+        await user.send(embed=dm_embed)
+    except discord.Forbidden:
+        await ctx.send(embed=create_info_embed("DM Failed", 
+            f"Couldn't send DM to {user.mention}. They may have DMs disabled."))
+    
+    logger.info(f"Admin {ctx.author.name} extended VPS {container_name} for {user.name} by {days} days")
+
+@bot.command(name='renewconfig', aliases=['renewal-config', 'renew-settings'])
+@is_admin()
+async def renewal_config(ctx, setting: str = None, value: str = None):
+    """Configure VPS renewal system settings"""
+    
+    if setting is None:
+        # Show current configuration
+        cost_1day = int(get_setting('coins_vps_renewal_1day', 50))
+        cost_7days = int(get_setting('coins_vps_renewal_7days', 300))
+        cost_30days = int(get_setting('coins_vps_renewal_30days', 1000))
+        default_days = int(get_setting('default_vps_duration_days', 7))
+        warning_hours = int(get_setting('vps_expiry_warning_hours', 24))
+        
+        embed = create_info_embed("ð° VPS Renewal Configuration", 
+            "Current renewal system settings")
+        
+        add_field(embed, "ðµ Renewal Costs", 
+            f"**1 Day:** {cost_1day} coins\n"
+            f"**7 Days:** {cost_7days} coins\n"
+            f"**30 Days:** {cost_30days} coins", True)
+        
+        add_field(embed, "â° Expiration Settings", 
+            f"**Default Duration:** {default_days} days\n"
+            f"**Warning Time:** {warning_hours} hours before", True)
+        
+        add_field(embed, "ð Available Settings", 
+            f"`cost_1day` - Cost for 1 day renewal\n"
+            f"`cost_7days` - Cost for 7 days renewal\n"
+            f"`cost_30days` - Cost for 30 days renewal\n"
+            f"`default_days` - Default VPS duration\n"
+            f"`warning_hours` - Hours before expiry to warn", False)
+        
+        add_field(embed, "ð¡ Usage", 
+            f"`{PREFIX}renewconfig <setting> <value>`\n"
+            f"Example: `{PREFIX}renewconfig cost_1day 100`", False)
+        
+        await ctx.send(embed=embed)
+        return
+    
+    # Update setting
+    setting = setting.lower()
+    valid_settings = {
+        'cost_1day': 'coins_vps_renewal_1day',
+        'cost_7days': 'coins_vps_renewal_7days',
+        'cost_30days': 'coins_vps_renewal_30days',
+        'default_days': 'default_vps_duration_days',
+        'warning_hours': 'vps_expiry_warning_hours'
+    }
+    
+    if setting not in valid_settings:
+        await ctx.send(embed=create_error_embed("Invalid Setting", 
+            f"Valid settings: {', '.join(valid_settings.keys())}"))
+        return
+    
+    if value is None:
+        await ctx.send(embed=create_error_embed("Missing Value", 
+            f"Usage: `{PREFIX}renewconfig {setting} <value>`"))
+        return
+    
+    try:
+        int_value = int(value)
+        if int_value < 1:
+            await ctx.send(embed=create_error_embed("Invalid Value", "Value must be positive"))
+            return
+    except ValueError:
+        await ctx.send(embed=create_error_embed("Invalid Value", "Value must be a number"))
+        return
+    
+    # Update the setting
+    db_key = valid_settings[setting]
+    set_setting(db_key, str(int_value))
+    
+    # Reload global variables if needed
+    if setting == 'default_days':
+        global DEFAULT_VPS_DURATION_DAYS
+        DEFAULT_VPS_DURATION_DAYS = int_value
+    
+    setting_names = {
+        'cost_1day': '1 Day Renewal Cost',
+        'cost_7days': '7 Days Renewal Cost',
+        'cost_30days': '30 Days Renewal Cost',
+        'default_days': 'Default VPS Duration',
+        'warning_hours': 'Expiry Warning Time'
+    }
+    
+    embed = create_success_embed("â Setting Updated", 
+        f"**{setting_names[setting]}** has been updated!\n\n"
+        f"**New Value:** {int_value} {'coins' if 'cost' in setting else 'days' if 'days' in setting else 'hours'}\n\n"
+        f"This will apply to all new renewals and VPS creations.")
+    
+    await ctx.send(embed=embed)
+    logger.info(f"Renewal config updated by {ctx.author.name}: {setting} = {int_value}")
+
+@bot.command(name='renewprices', aliases=['renewal-prices', 'renew-cost'])
+async def renewal_prices(ctx):
+    """Show VPS renewal pricing"""
+    cost_1day = int(get_setting('coins_vps_renewal_1day', 50))
+    cost_7days = int(get_setting('coins_vps_renewal_7days', 300))
+    cost_30days = int(get_setting('coins_vps_renewal_30days', 1000))
+    
+    # Calculate per-day costs
+    per_day_7 = cost_7days / 7
+    per_day_30 = cost_30days / 30
+    
+    # Calculate savings
+    savings_7 = ((cost_1day * 7) - cost_7days)
+    savings_30 = ((cost_1day * 30) - cost_30days)
+    savings_7_pct = (savings_7 / (cost_1day * 7)) * 100
+    savings_30_pct = (savings_30 / (cost_1day * 30)) * 100
+    
+    embed = create_info_embed("ð° VPS Renewal Pricing", 
+        "Extend your VPS subscription with coins")
+    
+    add_field(embed, "ð 1 Day Package", 
+        f"**Cost:** {cost_1day} coins\n"
+        f"**Per Day:** {cost_1day} coins\n"
+        f"**Best For:** Short-term testing", True)
+    
+    add_field(embed, "ð 7 Days Package", 
+        f"**Cost:** {cost_7days} coins\n"
+        f"**Per Day:** {per_day_7:.1f} coins\n"
+        f"**Save:** {savings_7:.0f} coins ({savings_7_pct:.0f}%)\n"
+        f"**Best For:** Weekly projects", True)
+    
+    add_field(embed, "ð 30 Days Package", 
+        f"**Cost:** {cost_30days} coins\n"
+        f"**Per Day:** {per_day_30:.1f} coins\n"
+        f"**Save:** {savings_30:.0f} coins ({savings_30_pct:.0f}%)\n"
+        f"**Best For:** Long-term hosting", True)
+    
+    add_field(embed, "ð¡ How to Renew", 
+        f"`{PREFIX}renew <vps_number> <days>`\n"
+        f"Example: `{PREFIX}renew 1 7` (renew VPS #1 for 7 days)", False)
+    
+    add_field(embed, "ðµ Earn Coins", 
+        f"`{PREFIX}daily` - Daily reward\n"
+        f"`{PREFIX}work` - Work for coins\n"
+        f"`{PREFIX}coinhelp` - More ways to earn", False)
+    
+    embed.set_footer(text=f"{BOT_NAME} â¢ Longer packages = Better value!")
+    
+    await ctx.send(embed=embed)
+
+# ============================================
+# ADMIN PLAN MANAGEMENT COMMANDS
+# ============================================
+
+@bot.command(name='create-deploy-plan', aliases=['add-deploy-plan', 'new-deploy-plan'])
+@is_admin()
+async def create_deploy_plan(ctx, name: str, ram: int, cpu: int, disk: int, days: int, cost: int, icon: str = "ð¦"):
+    """Create a new deployment plan"""
+    
+    if ram < 1 or cpu < 1 or disk < 1 or days < 1 or cost < 1:
+        await ctx.send(embed=create_error_embed("Invalid Values", 
+            "All values must be positive numbers."))
+        return
+    
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Check if plan name already exists
+        cur.execute('SELECT id FROM deploy_plans WHERE name = ?', (name,))
+        if cur.fetchone():
+            conn.close()
+            await ctx.send(embed=create_error_embed("Plan Exists", 
+                f"A deployment plan named **{name}** already exists.\n"
+                f"Use `{PREFIX}edit-deploy-plan` to modify it."))
+            return
+        
+        # Create plan
+        cur.execute('''INSERT INTO deploy_plans 
+                       (name, description, ram_gb, cpu_cores, disk_gb, duration_days, cost_coins, icon, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                   (name, f"{ram}GB RAM, {cpu} CPU, {disk}GB Disk for {days} days", 
+                    ram, cpu, disk, days, cost, icon, datetime.now().isoformat()))
+        
+        plan_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        
+        embed = create_success_embed("â Deployment Plan Created", 
+            f"**Plan ID:** {plan_id}\n"
+            f"**Name:** {icon} {name}\n"
+            f"**Resources:** {ram}GB RAM, {cpu} CPU, {disk}GB Disk\n"
+            f"**Duration:** {days} day{'s' if days > 1 else ''}\n"
+            f"**Cost:** {cost:,} coins\n\n"
+            f"Users can now deploy with: `{PREFIX}deploy {plan_id}`")
+        
+        await ctx.send(embed=embed)
+        logger.info(f"Admin {ctx.author.name} created deploy plan: {name}")
+        
+    except Exception as e:
+        await ctx.send(embed=create_error_embed("Creation Failed", f"Error: {str(e)}"))
+        logger.error(f"Failed to create deploy plan: {e}")
+
+@bot.command(name='edit-deploy-plan', aliases=['update-deploy-plan', 'modify-deploy-plan'])
+@is_admin()
+async def edit_deploy_plan(ctx, plan_id: int, field: str, value: str):
+    """Edit a deployment plan"""
+    
+    valid_fields = ['name', 'ram', 'cpu', 'disk', 'days', 'cost', 'icon', 'description', 'active']
+    if field.lower() not in valid_fields:
+        await ctx.send(embed=create_error_embed("Invalid Field", 
+            f"Valid fields: {', '.join(valid_fields)}"))
+        return
+    
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Check if plan exists
+        cur.execute('SELECT * FROM deploy_plans WHERE id = ?', (plan_id,))
+        plan = cur.fetchone()
+        if not plan:
+            conn.close()
+            await ctx.send(embed=create_error_embed("Plan Not Found", 
+                f"Deployment plan #{plan_id} not found."))
+            return
+        
+        plan = dict(plan)
+        
+        # Map field names to database columns
+        field_map = {
+            'name': 'name',
+            'ram': 'ram_gb',
+            'cpu': 'cpu_cores',
+            'disk': 'disk_gb',
+            'days': 'duration_days',
+            'cost': 'cost_coins',
+            'icon': 'icon',
+            'description': 'description',
+            'active': 'active'
+        }
+        
+        db_field = field_map[field.lower()]
+        
+        # Validate and convert value
+        if field.lower() in ['ram', 'cpu', 'disk', 'days', 'cost']:
+            try:
+                value = int(value)
+                if value < 1:
+                    raise ValueError("Must be positive")
+            except ValueError:
+                await ctx.send(embed=create_error_embed("Invalid Value", 
+                    f"{field} must be a positive number."))
+                conn.close()
+                return
+        elif field.lower() == 'active':
+            value = 1 if value.lower() in ['1', 'true', 'yes', 'active'] else 0
+        
+        # Update plan
+        cur.execute(f'UPDATE deploy_plans SET {db_field} = ? WHERE id = ?', (value, plan_id))
+        conn.commit()
+        conn.close()
+        
+        embed = create_success_embed("â Plan Updated", 
+            f"**Plan ID:** {plan_id}\n"
+            f"**Plan Name:** {plan['name']}\n"
+            f"**Updated Field:** {field}\n"
+            f"**New Value:** {value}\n\n"
+            f"Changes will apply to new deployments.")
+        
+        await ctx.send(embed=embed)
+        logger.info(f"Admin {ctx.author.name} updated deploy plan {plan_id}: {field} = {value}")
+        
+    except Exception as e:
+        await ctx.send(embed=create_error_embed("Update Failed", f"Error: {str(e)}"))
+        logger.error(f"Failed to update deploy plan: {e}")
+
+@bot.command(name='delete-deploy-plan', aliases=['remove-deploy-plan'])
+@is_admin()
+async def delete_deploy_plan(ctx, plan_id: int):
+    """Delete a deployment plan"""
+    
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Check if plan exists
+        cur.execute('SELECT * FROM deploy_plans WHERE id = ?', (plan_id,))
+        plan = cur.fetchone()
+        if not plan:
+            conn.close()
+            await ctx.send(embed=create_error_embed("Plan Not Found", 
+                f"Deployment plan #{plan_id} not found."))
+            return
+        
+        plan = dict(plan)
+        
+        # Delete plan
+        cur.execute('DELETE FROM deploy_plans WHERE id = ?', (plan_id,))
+        conn.commit()
+        conn.close()
+        
+        embed = create_success_embed("â Plan Deleted", 
+            f"**Plan ID:** {plan_id}\n"
+            f"**Plan Name:** {plan['icon']} {plan['name']}\n"
+            f"**Resources:** {plan['ram_gb']}GB RAM, {plan['cpu_cores']} CPU, {plan['disk_gb']}GB Disk\n\n"
+            f"This plan is no longer available for deployment.")
+        
+        await ctx.send(embed=embed)
+        logger.info(f"Admin {ctx.author.name} deleted deploy plan {plan_id}: {plan['name']}")
+        
+    except Exception as e:
+        await ctx.send(embed=create_error_embed("Deletion Failed", f"Error: {str(e)}"))
+        logger.error(f"Failed to delete deploy plan: {e}")
+
+@bot.command(name='create-resource-plan', aliases=['add-resource-plan', 'new-resource-plan'])
+@is_admin()
+async def create_resource_plan(ctx, name: str, ram: int, cpu: int, disk: int, cost: int, icon: str = "â¡"):
+    """Create a new resource upgrade plan"""
+    
+    if ram < 1 or cpu < 1 or disk < 1 or cost < 1:
+        await ctx.send(embed=create_error_embed("Invalid Values", 
+            "All values must be positive numbers."))
+        return
+    
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Check if plan name already exists
+        cur.execute('SELECT id FROM resource_plans WHERE name = ?', (name,))
+        if cur.fetchone():
+            conn.close()
+            await ctx.send(embed=create_error_embed("Plan Exists", 
+                f"A resource plan named **{name}** already exists.\n"
+                f"Use `{PREFIX}edit-resource-plan` to modify it."))
+            return
+        
+        # Create plan
+        cur.execute('''INSERT INTO resource_plans 
+                       (name, description, ram_gb, cpu_cores, disk_gb, upgrade_cost, icon, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                   (name, f"{ram}GB RAM, {cpu} CPU, {disk}GB Disk", 
+                    ram, cpu, disk, cost, icon, datetime.now().isoformat()))
+        
+        plan_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        
+        embed = create_success_embed("â Resource Plan Created", 
+            f"**Plan ID:** {plan_id}\n"
+            f"**Name:** {icon} {name}\n"
+            f"**Resources:** {ram}GB RAM, {cpu} CPU, {disk}GB Disk\n"
+            f"**Upgrade Cost:** {cost:,} coins\n\n"
+            f"Users can now upgrade with: `{PREFIX}upgrade <vps_id> {plan_id}`")
+        
+        await ctx.send(embed=embed)
+        logger.info(f"Admin {ctx.author.name} created resource plan: {name}")
+        
+    except Exception as e:
+        await ctx.send(embed=create_error_embed("Creation Failed", f"Error: {str(e)}"))
+        logger.error(f"Failed to create resource plan: {e}")
+
+@bot.command(name='edit-resource-plan', aliases=['update-resource-plan', 'modify-resource-plan'])
+@is_admin()
+async def edit_resource_plan(ctx, plan_id: int, field: str, value: str):
+    """Edit a resource upgrade plan"""
+    
+    valid_fields = ['name', 'ram', 'cpu', 'disk', 'cost', 'icon', 'description', 'active']
+    if field.lower() not in valid_fields:
+        await ctx.send(embed=create_error_embed("Invalid Field", 
+            f"Valid fields: {', '.join(valid_fields)}"))
+        return
+    
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Check if plan exists
+        cur.execute('SELECT * FROM resource_plans WHERE id = ?', (plan_id,))
+        plan = cur.fetchone()
+        if not plan:
+            conn.close()
+            await ctx.send(embed=create_error_embed("Plan Not Found", 
+                f"Resource plan #{plan_id} not found."))
+            return
+        
+        plan = dict(plan)
+        
+        # Map field names to database columns
+        field_map = {
+            'name': 'name',
+            'ram': 'ram_gb',
+            'cpu': 'cpu_cores',
+            'disk': 'disk_gb',
+            'cost': 'upgrade_cost',
+            'icon': 'icon',
+            'description': 'description',
+            'active': 'active'
+        }
+        
+        db_field = field_map[field.lower()]
+        
+        # Validate and convert value
+        if field.lower() in ['ram', 'cpu', 'disk', 'cost']:
+            try:
+                value = int(value)
+                if value < 1:
+                    raise ValueError("Must be positive")
+            except ValueError:
+                await ctx.send(embed=create_error_embed("Invalid Value", 
+                    f"{field} must be a positive number."))
+                conn.close()
+                return
+        elif field.lower() == 'active':
+            value = 1 if value.lower() in ['1', 'true', 'yes', 'active'] else 0
+        
+        # Update plan
+        cur.execute(f'UPDATE resource_plans SET {db_field} = ? WHERE id = ?', (value, plan_id))
+        conn.commit()
+        conn.close()
+        
+        embed = create_success_embed("â Plan Updated", 
+            f"**Plan ID:** {plan_id}\n"
+            f"**Plan Name:** {plan['name']}\n"
+            f"**Updated Field:** {field}\n"
+            f"**New Value:** {value}\n\n"
+            f"Changes will apply to new upgrades.")
+        
+        await ctx.send(embed=embed)
+        logger.info(f"Admin {ctx.author.name} updated resource plan {plan_id}: {field} = {value}")
+        
+    except Exception as e:
+        await ctx.send(embed=create_error_embed("Update Failed", f"Error: {str(e)}"))
+        logger.error(f"Failed to update resource plan: {e}")
+
+@bot.command(name='delete-resource-plan', aliases=['remove-resource-plan'])
+@is_admin()
+async def delete_resource_plan(ctx, plan_id: int):
+    """Delete a resource upgrade plan"""
+    
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Check if plan exists
+        cur.execute('SELECT * FROM resource_plans WHERE id = ?', (plan_id,))
+        plan = cur.fetchone()
+        if not plan:
+            conn.close()
+            await ctx.send(embed=create_error_embed("Plan Not Found", 
+                f"Resource plan #{plan_id} not found."))
+            return
+        
+        plan = dict(plan)
+        
+        # Delete plan
+        cur.execute('DELETE FROM resource_plans WHERE id = ?', (plan_id,))
+        conn.commit()
+        conn.close()
+        
+        embed = create_success_embed("â Plan Deleted", 
+            f"**Plan ID:** {plan_id}\n"
+            f"**Plan Name:** {plan['icon']} {plan['name']}\n"
+            f"**Resources:** {plan['ram_gb']}GB RAM, {plan['cpu_cores']} CPU, {plan['disk_gb']}GB Disk\n\n"
+            f"This plan is no longer available for upgrades.")
+        
+        await ctx.send(embed=embed)
+        logger.info(f"Admin {ctx.author.name} deleted resource plan {plan_id}: {plan['name']}")
+        
+    except Exception as e:
+        await ctx.send(embed=create_error_embed("Deletion Failed", f"Error: {str(e)}"))
+        logger.error(f"Failed to delete resource plan: {e}")
+
+@bot.command(name='list-deploy-plans', aliases=['all-deploy-plans'])
+@is_admin()
+async def list_deploy_plans_admin(ctx):
+    """List all deployment plans (including inactive)"""
+    
+    plans = get_deploy_plans(active_only=False)
+    
+    if not plans:
+        await ctx.send(embed=create_error_embed("No Plans", 
+            "No deployment plans exist. Create one with `{PREFIX}create-deploy-plan`."))
+        return
+    
+    embed = create_info_embed("ð All Deployment Plans (Admin View)", 
+        "All deployment plans including inactive ones")
+    
+    for plan in plans:
+        status = "â Active" if plan['active'] else "â Inactive"
+        plan_info = (
+            f"**ID:** {plan['id']}\n"
+            f"**Status:** {status}\n"
+            f"**Resources:** {plan['ram_gb']}GB RAM, {plan['cpu_cores']} CPU, {plan['disk_gb']}GB\n"
+            f"**Duration:** {plan['duration_days']} day(s)\n"
+            f"**Cost:** {plan['cost_coins']:,} coins\n"
+            f"**Edit:** `{PREFIX}edit-deploy-plan {plan['id']} <field> <value>`\n"
+            f"**Delete:** `{PREFIX}delete-deploy-plan {plan['id']}`"
+        )
+        add_field(embed, f"{plan['icon']} {plan['name']}", plan_info, True)
+    
+    add_field(embed, "ð¡ Management", 
+        f"**Create:** `{PREFIX}create-deploy-plan <name> <ram> <cpu> <disk> <days> <cost> [icon]`\n"
+        f"**Edit:** `{PREFIX}edit-deploy-plan <id> <field> <value>`\n"
+        f"**Delete:** `{PREFIX}delete-deploy-plan <id>`", False)
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='list-resource-plans', aliases=['all-resource-plans'])
+@is_admin()
+async def list_resource_plans_admin(ctx):
+    """List all resource plans (including inactive)"""
+    
+    plans = get_resource_plans(active_only=False)
+    
+    if not plans:
+        await ctx.send(embed=create_error_embed("No Plans", 
+            f"No resource plans exist. Create one with `{PREFIX}create-resource-plan`."))
+        return
+    
+    embed = create_info_embed("ð All Resource Plans (Admin View)", 
+        "All resource upgrade plans including inactive ones")
+    
+    for plan in plans:
+        status = "â Active" if plan['active'] else "â Inactive"
+        plan_info = (
+            f"**ID:** {plan['id']}\n"
+            f"**Status:** {status}\n"
+            f"**Resources:** {plan['ram_gb']}GB RAM, {plan['cpu_cores']} CPU, {plan['disk_gb']}GB\n"
+            f"**Cost:** {plan['upgrade_cost']:,} coins\n"
+            f"**Edit:** `{PREFIX}edit-resource-plan {plan['id']} <field> <value>`\n"
+            f"**Delete:** `{PREFIX}delete-resource-plan {plan['id']}`"
+        )
+        add_field(embed, f"{plan['icon']} {plan['name']}", plan_info, True)
+    
+    add_field(embed, "ð¡ Management", 
+        f"**Create:** `{PREFIX}create-resource-plan <name> <ram> <cpu> <disk> <cost> [icon]`\n"
+        f"**Edit:** `{PREFIX}edit-resource-plan <id> <field> <value>`\n"
+        f"**Delete:** `{PREFIX}delete-resource-plan <id>`", False)
+    
+    await ctx.send(embed=embed)
+
+# COUPON CODE MANAGEMENT COMMANDS
+# ============================================
+
+@bot.command(name='create-coupon', aliases=['add-coupon', 'new-coupon'])
+@is_admin()
+async def create_coupon_command(ctx, coins: int, code: str, max_uses: int = None, expires_in_days: int = None):
+    """Create a new coupon code
+    
+    Usage: !create-coupon <coins> <code> [max_uses] [expires_in_days]
+    
+    Examples:
+    !create-coupon 1000 WELCOME2024
+    !create-coupon 500 EVENT50 100
+    !create-coupon 2000 LIMITED 50 7
+    """
+    
+    if coins < 1:
+        await ctx.send(embed=create_error_embed("Invalid Amount", 
+            "Coins must be a positive number."))
+        return
+    
+    if len(code) < 3:
+        await ctx.send(embed=create_error_embed("Invalid Code", 
+            "Coupon code must be at least 3 characters long."))
+        return
+    
+    if max_uses is not None and max_uses < 1:
+        await ctx.send(embed=create_error_embed("Invalid Max Uses", 
+            "Max uses must be a positive number or leave blank for unlimited."))
+        return
+    
+    # Calculate expiry date
+    expires_at = None
+    if expires_in_days:
+        if expires_in_days < 1:
+            await ctx.send(embed=create_error_embed("Invalid Expiry", 
+                "Expiry days must be positive or leave blank for never."))
+            return
+        expires_at = (datetime.now() + timedelta(days=expires_in_days)).isoformat()
+    
+    try:
+        def create():
+            return create_coupon(code, coins, max_uses, expires_at, 
+                               str(ctx.author.id), f"Created by {ctx.author.name}")
+        
+        coupon_id = await run_in_executor(create)
+        
+        # Build success message
+        expiry_text = f"{expires_in_days} days" if expires_in_days else "Never"
+        uses_text = f"{max_uses} uses" if max_uses else "Unlimited"
+        
+        embed = create_success_embed("â Coupon Created", 
+            f"**Code:** `{code.upper()}`\n"
+            f"**Coins:** {coins:,}\n"
+            f"**Max Uses:** {uses_text}\n"
+            f"**Expires:** {expiry_text}\n"
+            f"**Coupon ID:** {coupon_id}\n\n"
+            f"Users can redeem with: `{PREFIX}redeem {code.upper()}`")
+        
+        await ctx.send(embed=embed)
+        logger.info(f"Admin {ctx.author.name} created coupon {code} for {coins} coins")
+        
+    except Exception as e:
+        if "UNIQUE constraint failed" in str(e):
+            await ctx.send(embed=create_error_embed("Code Exists", 
+                f"Coupon code `{code.upper()}` already exists.\n"
+                f"Use a different code or delete the existing one."))
+        else:
+            await ctx.send(embed=create_error_embed("Creation Failed", f"Error: {str(e)}"))
+        logger.error(f"Failed to create coupon: {e}")
+
+@bot.command(name='list-coupons', aliases=['all-coupons', 'coupons'])
+@is_admin()
+async def list_coupons_command(ctx, show_all: str = None):
+    """List all coupon codes (admin only)
+    
+    Usage: !list-coupons [all]
+    
+    Examples:
+    !list-coupons       # Show active only
+    !list-coupons all   # Show all including inactive
+    """
+    
+    show_inactive = show_all and show_all.lower() == 'all'
+    
+    def get_coupons():
+        return get_all_coupons(active_only=not show_inactive)
+    
+    coupons = await run_in_executor(get_coupons)
+    
+    if not coupons:
+        await ctx.send(embed=create_error_embed("No Coupons", 
+            "No coupon codes exist. Create one with `{PREFIX}create-coupon`."))
+        return
+    
+    embed = create_info_embed("ð³ Coupon Codes (Admin View)", 
+        f"{'All coupon codes' if show_inactive else 'Active coupon codes only'}")
+    
+    for coupon in coupons[:25]:  # Limit to 25 to avoid embed limits
+        status = "â Active" if coupon['active'] else "â Disabled"
+        
+        # Expiry info
+        if coupon['expires_at']:
+            expiry_dt = datetime.fromisoformat(coupon['expires_at'])
+            if datetime.now() > expiry_dt:
+                expiry_text = f"â Expired ({expiry_dt.strftime('%Y-%m-%d')})"
+            else:
+                days_left = (expiry_dt - datetime.now()).days
+                expiry_text = f"â° {days_left} days left"
+        else:
+            expiry_text = "â¾ï¸ Never expires"
+        
+        # Usage info
+        if coupon['max_uses']:
+            remaining = coupon['max_uses'] - coupon['current_uses']
+            usage_text = f"{coupon['current_uses']}/{coupon['max_uses']} used ({remaining} left)"
+        else:
+            usage_text = f"{coupon['current_uses']} used (unlimited)"
+        
+        coupon_info = (
+            f"**ID:** {coupon['id']} | **Status:** {status}\n"
+            f"**Coins:** {coupon['coins']:,}\n"
+            f"**Usage:** {usage_text}\n"
+            f"**Expiry:** {expiry_text}\n"
+            f"**Commands:**\n"
+            f"`{PREFIX}coupon-stats {coupon['id']}` - View stats\n"
+            f"`{PREFIX}disable-coupon {coupon['id']}` - Disable\n"
+            f"`{PREFIX}delete-coupon {coupon['id']}` - Delete"
+        )
+        
+        add_field(embed, f"ð³ {coupon['code']}", coupon_info, True)
+    
+    if len(coupons) > 25:
+        embed.set_footer(text=f"Showing 25 of {len(coupons)} coupons")
+    
+    add_field(embed, "ð¡ Management", 
+        f"**Create:** `{PREFIX}create-coupon <coins> <code> [max_uses] [days]`\n"
+        f"**Stats:** `{PREFIX}coupon-stats <id>`\n"
+        f"**Disable:** `{PREFIX}disable-coupon <id>`\n"
+        f"**Enable:** `{PREFIX}enable-coupon <id>`\n"
+        f"**Delete:** `{PREFIX}delete-coupon <id>`", False)
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='coupon-stats', aliases=['coupon-info'])
+@is_admin()
+async def coupon_stats_command(ctx, coupon_id: int):
+    """View detailed coupon statistics
+    
+    Usage: !coupon-stats <coupon_id>
+    """
+    
+    def get_stats():
+        return get_coupon_stats(coupon_id)
+    
+    stats = await run_in_executor(get_stats)
+    
+    if not stats:
+        await ctx.send(embed=create_error_embed("Coupon Not Found", 
+            f"Coupon ID #{coupon_id} not found."))
+        return
+    
+    coupon = stats['coupon']
+    
+    # Status
+    status = "â Active" if coupon['active'] else "â Disabled"
+    
+    # Expiry
+    if coupon['expires_at']:
+        expiry_dt = datetime.fromisoformat(coupon['expires_at'])
+        if datetime.now() > expiry_dt:
+            expiry_text = f"â Expired on {expiry_dt.strftime('%Y-%m-%d %H:%M')}"
+        else:
+            days_left = (expiry_dt - datetime.now()).days
+            expiry_text = f"â° Expires in {days_left} days ({expiry_dt.strftime('%Y-%m-%d')})"
+    else:
+        expiry_text = "â¾ï¸ Never expires"
+    
+    # Usage
+    if coupon['max_uses']:
+        remaining = coupon['max_uses'] - coupon['current_uses']
+        usage_pct = (coupon['current_uses'] / coupon['max_uses']) * 100
+        usage_text = f"{coupon['current_uses']}/{coupon['max_uses']} ({usage_pct:.1f}%)\n{remaining} uses remaining"
+    else:
+        usage_text = f"{coupon['current_uses']} times\nUnlimited uses"
+    
+    embed = create_info_embed(f"ð³ Coupon: {coupon['code']}", 
+        f"Detailed statistics for coupon #{coupon_id}")
+    
+    add_field(embed, "ð Basic Info", 
+        f"**Code:** `{coupon['code']}`\n"
+        f"**Status:** {status}\n"
+        f"**Coins:** {coupon['coins']:,}\n"
+        f"**Created:** {datetime.fromisoformat(coupon['created_at']).strftime('%Y-%m-%d %H:%M')}", True)
+    
+    add_field(embed, "ð Usage Stats", 
+        f"**Times Used:** {usage_text}\n"
+        f"**Total Coins Given:** {stats['total_coins']:,}\n"
+        f"**Unique Users:** {stats['redemptions']}", True)
+    
+    add_field(embed, "â° Expiry", expiry_text, True)
+    
+    # Recent redemptions
+    if stats['recent']:
+        recent_text = []
+        for redemption in stats['recent'][:5]:
+            user_id = redemption['user_id']
+            coins = redemption['coins_received']
+            date = datetime.fromisoformat(redemption['redeemed_at']).strftime('%Y-%m-%d %H:%M')
+            recent_text.append(f"â¢ <@{user_id}>: {coins:,} coins ({date})")
+        
+        add_field(embed, "ð Recent Redemptions", "\n".join(recent_text), False)
+    else:
+        add_field(embed, "ð Recent Redemptions", "No redemptions yet", False)
+    
+    add_field(embed, "ð¡ Management", 
+        f"`{PREFIX}disable-coupon {coupon_id}` - Disable coupon\n"
+        f"`{PREFIX}enable-coupon {coupon_id}` - Enable coupon\n"
+        f"`{PREFIX}delete-coupon {coupon_id}` - Delete permanently", False)
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='disable-coupon', aliases=['deactivate-coupon'])
+@is_admin()
+async def disable_coupon_command(ctx, coupon_id: int):
+    """Disable a coupon code
+    
+    Usage: !disable-coupon <coupon_id>
+    """
+    
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Check if exists
+        cur.execute('SELECT * FROM coupon_codes WHERE id = ?', (coupon_id,))
+        coupon = cur.fetchone()
+        
+        if not coupon:
+            conn.close()
+            await ctx.send(embed=create_error_embed("Coupon Not Found", 
+                f"Coupon ID #{coupon_id} not found."))
+            return
+        
+        coupon = dict(coupon)
+        
+        # Disable
+        cur.execute('UPDATE coupon_codes SET active = 0 WHERE id = ?', (coupon_id,))
+        conn.commit()
+        conn.close()
+        
+        embed = create_success_embed("â Coupon Disabled", 
+            f"**Code:** `{coupon['code']}`\n"
+            f"**Coupon ID:** {coupon_id}\n\n"
+            f"This coupon can no longer be redeemed.\n"
+            f"Use `{PREFIX}enable-coupon {coupon_id}` to re-enable it.")
+        
+        await ctx.send(embed=embed)
+        logger.info(f"Admin {ctx.author.name} disabled coupon {coupon['code']}")
+        
+    except Exception as e:
+        await ctx.send(embed=create_error_embed("Failed", f"Error: {str(e)}"))
+        logger.error(f"Failed to disable coupon: {e}")
+
+@bot.command(name='enable-coupon', aliases=['activate-coupon'])
+@is_admin()
+async def enable_coupon_command(ctx, coupon_id: int):
+    """Enable a disabled coupon code
+    
+    Usage: !enable-coupon <coupon_id>
+    """
+    
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Check if exists
+        cur.execute('SELECT * FROM coupon_codes WHERE id = ?', (coupon_id,))
+        coupon = cur.fetchone()
+        
+        if not coupon:
+            conn.close()
+            await ctx.send(embed=create_error_embed("Coupon Not Found", 
+                f"Coupon ID #{coupon_id} not found."))
+            return
+        
+        coupon = dict(coupon)
+        
+        # Enable
+        cur.execute('UPDATE coupon_codes SET active = 1 WHERE id = ?', (coupon_id,))
+        conn.commit()
+        conn.close()
+        
+        embed = create_success_embed("â Coupon Enabled", 
+            f"**Code:** `{coupon['code']}`\n"
+            f"**Coupon ID:** {coupon_id}\n\n"
+            f"This coupon can now be redeemed again.\n"
+            f"Users can use: `{PREFIX}redeem {coupon['code']}`")
+        
+        await ctx.send(embed=embed)
+        logger.info(f"Admin {ctx.author.name} enabled coupon {coupon['code']}")
+        
+    except Exception as e:
+        await ctx.send(embed=create_error_embed("Failed", f"Error: {str(e)}"))
+        logger.error(f"Failed to enable coupon: {e}")
+
+@bot.command(name='delete-coupon', aliases=['remove-coupon'])
+@is_admin()
+async def delete_coupon_command(ctx, coupon_id: int):
+    """Delete a coupon code permanently
+    
+    Usage: !delete-coupon <coupon_id>
+    """
+    
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Check if exists
+        cur.execute('SELECT * FROM coupon_codes WHERE id = ?', (coupon_id,))
+        coupon = cur.fetchone()
+        
+        if not coupon:
+            conn.close()
+            await ctx.send(embed=create_error_embed("Coupon Not Found", 
+                f"Coupon ID #{coupon_id} not found."))
+            return
+        
+        coupon = dict(coupon)
+        
+        # Get stats before deleting
+        cur.execute('SELECT COUNT(*) as count FROM coupon_redemptions WHERE coupon_id = ?', (coupon_id,))
+        redemptions = cur.fetchone()['count']
+        
+        # Delete (redemptions will remain for history)
+        cur.execute('DELETE FROM coupon_codes WHERE id = ?', (coupon_id,))
+        conn.commit()
+        conn.close()
+        
+        embed = create_success_embed("â Coupon Deleted", 
+            f"**Code:** `{coupon['code']}`\n"
+            f"**Coupon ID:** {coupon_id}\n"
+            f"**Total Redemptions:** {redemptions}\n\n"
+            f"This coupon has been permanently deleted.\n"
+            f"Redemption history has been preserved.")
+        
+        await ctx.send(embed=embed)
+        logger.info(f"Admin {ctx.author.name} deleted coupon {coupon['code']}")
+        
+    except Exception as e:
+        await ctx.send(embed=create_error_embed("Failed", f"Error: {str(e)}"))
+        logger.error(f"Failed to delete coupon: {e}")
+
+# SECURITY ADMIN COMMANDS
+# ============================================
+
+@bot.command(name='security-logs', aliases=['sec-logs', 'suspicious'])
+@is_admin()
+async def security_logs_command(ctx, user: discord.Member = None, limit: int = 20):
+    """View security logs and suspicious activity
+    
+    Usage: !security-logs [@user] [limit]
+    
+    Examples:
+    !security-logs              # Show recent 20 logs
+    !security-logs @user        # Show logs for specific user
+    !security-logs @user 50     # Show 50 logs for user
+    """
+    
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        if user:
+            cur.execute('''SELECT * FROM security_logs 
+                           WHERE user_id = ? 
+                           ORDER BY created_at DESC LIMIT ?''',
+                       (str(user.id), limit))
+        else:
+            cur.execute('''SELECT * FROM security_logs 
+                           ORDER BY created_at DESC LIMIT ?''', (limit,))
+        
+        logs = [dict(row) for row in cur.fetchall()]
+        conn.close()
+        
+        if not logs:
+            await ctx.send(embed=create_info_embed("ð Security Logs",
+                "No security events found."))
+            return
+        
+        embed = create_info_embed("ð Security Logs",
+            f"Showing {len(logs)} most recent security events")
+        
+        for log in logs[:10]:  # Show max 10 in embed
+            severity_emoji = {
+                'low': 'ð¢',
+                'medium': 'ð¡',
+                'high': 'ð´',
+                'critical': 'ð¨'
+            }.get(log['severity'], 'âª')
+            
+            flag_emoji = 'ð©' if log['flagged'] else ''
+            
+            log_text = (
+                f"{severity_emoji} **{log['activity_type']}** {flag_emoji}\n"
+                f"User: <@{log['user_id']}>\n"
+                f"{log['description']}\n"
+                f"Time: {datetime.fromisoformat(log['created_at']).strftime('%Y-%m-%d %H:%M')}"
+            )
+            
+            add_field(embed, f"Log #{log['id']}", log_text, False)
+        
+        if len(logs) > 10:
+            embed.set_footer(text=f"Showing 10 of {len(logs)} logs")
+        
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        await ctx.send(embed=create_error_embed("Failed", f"Error: {str(e)}"))
+        logger.error(f"Failed to get security logs: {e}")
+
+@bot.command(name='trust-score', aliases=['trust', 'user-trust'])
+@is_admin()
+async def trust_score_command(ctx, user: discord.Member):
+    """View user's trust score and security status
+    
+    Usage: !trust-score @user
+    """
+    
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        cur.execute('SELECT * FROM user_trust WHERE user_id = ?', (str(user.id),))
+        trust = cur.fetchone()
+        
+        if not trust:
+            # Create default trust record
+            cur.execute('''INSERT INTO user_trust (user_id, trust_score, warnings, violations)
+                           VALUES (?, 100, 0, 0)''', (str(user.id),))
+            conn.commit()
+            trust_score = 100
+            warnings = 0
+            violations = 0
+            restricted = False
+            notes = None
+        else:
+            trust = dict(trust)
+            trust_score = trust['trust_score']
+            warnings = trust['warnings']
+            violations = trust['violations']
+            restricted = trust['restricted'] == 1
+            notes = trust.get('notes')
+        
+        # Get recent security logs
+        cur.execute('''SELECT COUNT(*) as count FROM security_logs 
+                       WHERE user_id = ? AND severity IN ('high', 'critical')''',
+                   (str(user.id),))
+        high_severity_count = cur.fetchone()['count']
+        
+        conn.close()
+        
+        # Determine status color
+        if trust_score >= 80:
+            color = 0x2ecc71  # Green
+            status = "â Trusted"
+        elif trust_score >= 50:
+            color = 0xf39c12  # Orange
+            status = "â ï¸ Caution"
+        elif trust_score >= 20:
+            color = 0xe74c3c  # Red
+            status = "ð´ Warning"
+        else:
+            color = 0x95a5a6  # Gray
+            status = "ð« High Risk"
+        
+        embed = create_embed(f"ð Trust Score: {user.name}", status, color)
+        
+        add_field(embed, "ð Trust Score", f"**{trust_score}/100**", True)
+        add_field(embed, "â ï¸ Warnings", str(warnings), True)
+        add_field(embed, "â Violations", str(violations), True)
+        add_field(embed, "ð¨ High Severity Events", str(high_severity_count), True)
+        add_field(embed, "ð Restricted", "Yes" if restricted else "No", True)
+        
+        if notes:
+            add_field(embed, "ð Notes", notes[-500:], False)  # Last 500 chars
+        
+        add_field(embed, "ð¡ Actions",
+            f"`{PREFIX}restrict-user @user` - Restrict from earning coins\n"
+            f"`{PREFIX}unrestrict-user @user` - Remove restriction\n"
+            f"`{PREFIX}reset-trust @user` - Reset trust score to 100\n"
+            f"`{PREFIX}security-logs @user` - View security logs", False)
+        
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        await ctx.send(embed=create_error_embed("Failed", f"Error: {str(e)}"))
+        logger.error(f"Failed to get trust score: {e}")
+
+@bot.command(name='restrict-user', aliases=['restrict'])
+@is_admin()
+async def restrict_user_command(ctx, user: discord.Member, *, reason: str = "Admin action"):
+    """Restrict user from earning coins
+    
+    Usage: !restrict-user @user [reason]
+    """
+    
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Ensure user exists in trust table
+        cur.execute('''INSERT OR IGNORE INTO user_trust 
+                       (user_id, trust_score, warnings, violations)
+                       VALUES (?, 100, 0, 0)''', (str(user.id),))
+        
+        # Restrict user
+        cur.execute('''UPDATE user_trust 
+                       SET restricted = 1,
+                           notes = COALESCE(notes || '\n', '') || ?
+                       WHERE user_id = ?''',
+                   (f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] RESTRICTED: {reason}",
+                    str(user.id)))
+        
+        conn.commit()
+        conn.close()
+        
+        # Log security event
+        log_security_event(str(user.id), 'admin_restriction',
+                         f'Restricted by {ctx.author.name}: {reason}',
+                         'high')
+        
+        embed = create_success_embed("ð User Restricted",
+            f"**User:** {user.mention}\n"
+            f"**Reason:** {reason}\n\n"
+            f"This user can no longer earn coins through any method.\n"
+            f"Use `{PREFIX}unrestrict-user @user` to remove restriction.")
+        
+        await ctx.send(embed=embed)
+        
+        # Notify user
+        try:
+            user_embed = create_error_embed("ð Account Restricted",
+                f"Your account has been restricted from earning coins.\n\n"
+                f"**Reason:** {reason}\n\n"
+                f"Contact an administrator for more information.")
+            await user.send(embed=user_embed)
+        except:
+            pass
+        
+        logger.info(f"Admin {ctx.author.name} restricted user {user.name}: {reason}")
+        
+    except Exception as e:
+        await ctx.send(embed=create_error_embed("Failed", f"Error: {str(e)}"))
+        logger.error(f"Failed to restrict user: {e}")
+
+@bot.command(name='unrestrict-user', aliases=['unrestrict'])
+@is_admin()
+async def unrestrict_user_command(ctx, user: discord.Member):
+    """Remove restriction from user
+    
+    Usage: !unrestrict-user @user
+    """
+    
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        cur.execute('''UPDATE user_trust 
+                       SET restricted = 0,
+                           notes = COALESCE(notes || '\n', '') || ?
+                       WHERE user_id = ?''',
+                   (f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] UNRESTRICTED by {ctx.author.name}",
+                    str(user.id)))
+        
+        conn.commit()
+        conn.close()
+        
+        embed = create_success_embed("â Restriction Removed",
+            f"**User:** {user.mention}\n\n"
+            f"This user can now earn coins again.")
+        
+        await ctx.send(embed=embed)
+        
+        # Notify user
+        try:
+            user_embed = create_success_embed("â Restriction Removed",
+                "Your account restriction has been lifted.\n"
+                "You can now earn coins again!")
+            await user.send(embed=user_embed)
+        except:
+            pass
+        
+        logger.info(f"Admin {ctx.author.name} unrestricted user {user.name}")
+        
+    except Exception as e:
+        await ctx.send(embed=create_error_embed("Failed", f"Error: {str(e)}"))
+        logger.error(f"Failed to unrestrict user: {e}")
+
+@bot.command(name='reset-trust', aliases=['reset-trust-score'])
+@is_admin()
+async def reset_trust_command(ctx, user: discord.Member):
+    """Reset user's trust score to 100
+    
+    Usage: !reset-trust @user
+    """
+    
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        cur.execute('''UPDATE user_trust 
+                       SET trust_score = 100,
+                           warnings = 0,
+                           violations = 0,
+                           notes = COALESCE(notes || '\n', '') || ?
+                       WHERE user_id = ?''',
+                   (f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] Trust score reset by {ctx.author.name}",
+                    str(user.id)))
+        
+        conn.commit()
+        conn.close()
+        
+        embed = create_success_embed("â Trust Score Reset",
+            f"**User:** {user.mention}\n"
+            f"**New Score:** 100/100\n\n"
+            f"Warnings and violations have been cleared.")
+        
+        await ctx.send(embed=embed)
+        logger.info(f"Admin {ctx.author.name} reset trust score for {user.name}")
+        
+    except Exception as e:
+        await ctx.send(embed=create_error_embed("Failed", f"Error: {str(e)}"))
+        logger.error(f"Failed to reset trust: {e}")
+
+@bot.command(name='coinhelp', aliases=['earncoins', 'howtocoins'])
+async def coin_help(ctx):
+    """Show how to earn coins"""
+    coins_per_invite = int(get_setting('coins_per_invite', 50))
+    coins_per_message = int(get_setting('coins_per_message', 1))
+    coins_per_voice_min = int(get_setting('coins_per_voice_minute', 2))
+    coins_daily = int(get_setting('coins_daily_reward', 100))
+    message_cooldown = int(get_setting('message_cooldown_seconds', 60))
+    voice_min_duration = int(get_setting('voice_min_duration_minutes', 5))
+    
+    embed = create_embed("ð° How to Earn Coins", "All the ways to earn coins!", 0xf1c40f)
+    
+    add_field(embed, "ð Daily Reward", 
+        f"**{coins_daily} coins** per day\n"
+        f"Command: `{PREFIX}daily`\n"
+        f"Claim once every 24 hours!", False)
+    
+    add_field(embed, "ð¥ Invite Members", 
+        f"**{coins_per_invite} coins** per invite\n"
+        f"Invite friends to the server!\n"
+        f"Automatic reward when they join", False)
+    
+    add_field(embed, "ð¬ Send Messages", 
+        f"**{coins_per_message} coin** per message\n"
+        f"Cooldown: {message_cooldown} seconds\n"
+        f"Chat actively to earn!", False)
+    
+    add_field(embed, "ð¤ Voice Activity", 
+        f"**{coins_per_voice_min} coins** per minute\n"
+        f"Minimum: {voice_min_duration} minutes\n"
+        f"Join voice channels!", False)
+    
+    add_field(embed, "ï¿½ Redeem Coupons", 
+        f"**Redeem coupon codes** for instant coins!\n"
+        f"Command: `{PREFIX}redeem <code>`\n"
+        f"Watch for codes in announcements!", False)
+    
+    add_field(embed, "ï¿½ Coin Uses", 
+        f"â¢ Renew VPS: `{PREFIX}renew <vps#> <days>`\n"
+        f"â¢ Deploy VPS: `{PREFIX}deploy <plan_id>`\n"
+        f"â¢ Upgrade VPS: `{PREFIX}upgrade <vps#> <plan_id>`\n"
+        f"â¢ Shop items: `{PREFIX}shop`", False)
+    
+    add_field(embed, "ð Check Your Stats", 
+        f"`{PREFIX}balance` - Check your coins\n"
+        f"`{PREFIX}leaderboard` - See top earners\n"
+        f"`{PREFIX}transactions` - View history", False)
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='givecoins')
+@is_admin()
+async def give_coins(ctx, user: discord.Member, amount: int, *, reason: str = "Admin gift"):
+    """Give coins to a user (Admin only)"""
+    if amount <= 0:
+        await ctx.send(embed=create_error_embed("Invalid Amount", "Amount must be positive."))
+        return
+    
+    user_id = str(user.id)
+    # Run in executor
+    new_balance = await run_in_executor(add_coins, user_id, amount, 'admin_give', reason)
+    
+    embed = create_success_embed("ð° Coins Given", 
+        f"Gave **{amount:,} coins** to {user.mention}\n"
+        f"Reason: {reason}\n"
+        f"Their new balance: **{new_balance:,} coins**")
+    
+    await ctx.send(embed=embed)
+    
+    # Notify user
+    try:
+        dm_embed = create_success_embed("ð You Received Coins!", 
+            f"An admin gave you **{amount:,} coins**!\n"
+            f"Reason: {reason}\n"
+            f"New balance: **{new_balance:,} coins**")
+        await user.send(embed=dm_embed)
+    except:
+        pass
+
+@bot.command(name='removecoins', aliases=['takecoins'])
+@is_admin()
+async def remove_coins_command(ctx, user: discord.Member, amount: int, *, reason: str = "Admin removal"):
+    """Remove coins from a user (Admin only)"""
+    if amount <= 0:
+        await ctx.send(embed=create_error_embed("Invalid Amount", "Amount must be positive."))
+        return
+    
+    user_id = str(user.id)
+    # Run in executor
+    success, new_balance = await run_in_executor(remove_coins, user_id, amount, 'admin_remove', reason)
+    
+    if not success:
+        await ctx.send(embed=create_error_embed("Insufficient Coins", 
+            f"{user.mention} only has **{new_balance:,} coins**."))
+        return
+    
+    embed = create_success_embed("ð¸ Coins Removed", 
+        f"Removed **{amount:,} coins** from {user.mention}\n"
+        f"Reason: {reason}\n"
+        f"Their new balance: **{new_balance:,} coins**")
+    
+    await ctx.send(embed=embed)
+    
+    # Notify user
+    try:
+        dm_embed = create_warning_embed("â ï¸ Coins Removed", 
+            f"An admin removed **{amount:,} coins** from your account.\n"
+            f"Reason: {reason}\n"
+            f"New balance: **{new_balance:,} coins**")
+        await user.send(embed=dm_embed)
+    except:
+        pass
+
+@bot.command(name='setcoins')
+@is_admin()
+async def set_coins_command(ctx, user: discord.Member, amount: int):
+    """Set a user's coin balance (Admin only)"""
+    if amount < 0:
+        await ctx.send(embed=create_error_embed("Invalid Amount", "Amount cannot be negative."))
+        return
+    
+    user_id = str(user.id)
+    
+    # Run in executor
+    def set_balance():
+        coins_data = get_user_coins(user_id)
+        current_balance = coins_data['balance']
+        
+        # Calculate difference
+        diff = amount - current_balance
+        
+        if diff > 0:
+            add_coins(user_id, diff, 'admin_set', f'Balance set to {amount}')
+        elif diff < 0:
+            remove_coins(user_id, abs(diff), 'admin_set', f'Balance set to {amount}')
+        
+        return current_balance, diff
+    
+    current_balance, diff = await run_in_executor(set_balance)
+    
+    embed = create_success_embed("ð° Balance Set", 
+        f"Set {user.mention}'s balance to **{amount:,} coins**\n"
+        f"Previous balance: **{current_balance:,} coins**\n"
+        f"Change: **{diff:+,} coins**")
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='coinconfig', aliases=['coinsettings'])
+@is_admin()
+async def coin_config(ctx, setting: str = None, value: str = None):
+    """Configure coin economy settings (Admin only)"""
+    
+    if setting is None:
+        # Show all settings
+        embed = create_info_embed("âï¸ Coin Economy Settings", "Current configuration")
+        
+        settings_to_show = [
+            ('coins_per_invite', 'Coins per Invite'),
+            ('coins_per_message', 'Coins per Message'),
+            ('coins_per_voice_minute', 'Coins per Voice Minute'),
+            ('coins_daily_reward', 'Daily Reward'),
+            ('coins_vps_renewal_1day', 'VPS Renewal (1 day)'),
+            ('coins_vps_renewal_7days', 'VPS Renewal (7 days)'),
+            ('coins_vps_renewal_30days', 'VPS Renewal (30 days)'),
+            ('default_vps_duration_days', 'Default VPS Duration'),
+            ('vps_expiry_warning_hours', 'Expiry Warning (hours)'),
+            ('message_cooldown_seconds', 'Message Cooldown (sec)'),
+            ('voice_min_duration_minutes', 'Min Voice Duration (min)'),
+        ]
+        
+        config_text = []
+        for key, label in settings_to_show:
+            val = get_setting(key, 'Not set')
+            config_text.append(f"**{label}:** `{val}`")
+        
+        add_field(embed, "Current Settings", "\n".join(config_text), False)
+        add_field(embed, "Usage", 
+            f"`{PREFIX}coinconfig <setting> <value>`\n"
+            f"Example: `{PREFIX}coinconfig coins_per_invite 100`", False)
+        
+        await ctx.send(embed=embed)
+        return
+    
+    if value is None:
+        await ctx.send(embed=create_error_embed("Missing Value", 
+            f"Usage: `{PREFIX}coinconfig <setting> <value>`"))
+        return
+    
+    # Update setting
+    try:
+        # Validate it's a number
+        int(value)
+        set_setting(setting, value)
+        
+        embed = create_success_embed("â Setting Updated", 
+            f"**{setting}** = `{value}`\n\n"
+            f"The new value will take effect immediately.")
+        
+        await ctx.send(embed=embed)
+    except ValueError:
+        await ctx.send(embed=create_error_embed("Invalid Value", "Value must be a number."))
+
+
+@bot.command(name='achievements', aliases=['ach', 'badges'])
+async def achievements_command(ctx, user: discord.Member = None):
+    """View achievements"""
+    target_user = user or ctx.author
+    user_id = str(target_user.id)
+    
+    # Run in executor
+    def get_achievements_data():
+        unlocked = get_user_achievements(user_id)
+        
+        # Get all achievements
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute('SELECT * FROM achievements ORDER BY category, reward_coins')
+        all_achievements = [dict(row) for row in cur.fetchall()]
+        conn.close()
+        
+        return unlocked, all_achievements
+    
+    unlocked, all_achievements = await run_in_executor(get_achievements_data)
+    
+    unlocked_ids = [a['id'] for a in unlocked]
+    
+    embed = create_embed("ð Achievements", f"Progress for {target_user.mention}", 0xf1c40f)
+    
+    add_field(embed, "ð Progress", 
+        f"**Unlocked:** {len(unlocked)}/{len(all_achievements)}\n"
+        f"**Completion:** {int(len(unlocked)/len(all_achievements)*100)}%", True)
+    
+    # Group by category
+    categories = {}
+    for ach in all_achievements:
+        cat = ach['category']
+        if cat not in categories:
+            categories[cat] = []
+        
+        status = "â" if ach['id'] in unlocked_ids else "ð"
+        categories[cat].append(f"{status} {ach['icon']} **{ach['name']}** - {ach['reward_coins']} coins")
+    
+    for cat, achs in categories.items():
+        add_field(embed, f"ð {cat.title()}", "\n".join(achs[:5]), False)
+        if len(achs) > 5:
+            add_field(embed, "...", f"And {len(achs)-5} more", False)
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='quests', aliases=['quest', 'missions'])
+async def quests_command(ctx):
+    """View active quests"""
+    user_id = str(ctx.author.id)
+    
+    # Run in executor
+    def get_quests_data():
+        daily_quests = get_active_quests(user_id, 'daily')
+        weekly_quests = get_active_quests(user_id, 'weekly')
+        return daily_quests, weekly_quests
+    
+    daily_quests, weekly_quests = await run_in_executor(get_quests_data)
+    
+    embed = create_embed("ð Active Quests", "Complete quests to earn bonus coins!", 0x9b59b6)
+    
+    if daily_quests:
+        daily_text = []
+        for quest in daily_quests:
+            progress = quest.get('progress', 0)
+            required = quest['requirement_value']
+            reward = quest['reward_coins']
+            completed = quest.get('completed', 0)
+            
+            if completed:
+                status = "â"
+                bar = "â" * 10
+            else:
+                status = "ð"
+                pct = min(progress / required, 1.0)
+                filled = int(pct * 10)
+                bar = "â" * filled + "â" * (10 - filled)
+            
+            daily_text.append(
+                f"{status} **{quest['name']}**\n"
+                f"   {bar} {progress}/{required}\n"
+                f"   Reward: {reward} coins"
+            )
+        
+        add_field(embed, "ð Daily Quests", "\n\n".join(daily_text), False)
+    
+    if weekly_quests:
+        weekly_text = []
+        for quest in weekly_quests:
+            progress = quest.get('progress', 0)
+            required = quest['requirement_value']
+            reward = quest['reward_coins']
+            completed = quest.get('completed', 0)
+            
+            if completed:
+                status = "â"
+                bar = "â" * 10
+            else:
+                status = "ð"
+                pct = min(progress / required, 1.0)
+                filled = int(pct * 10)
+                bar = "â" * filled + "â" * (10 - filled)
+            
+            weekly_text.append(
+                f"{status} **{quest['name']}**\n"
+                f"   {bar} {progress}/{required}\n"
+                f"   Reward: {reward} coins"
+            )
+        
+        add_field(embed, "ð Weekly Quests", "\n\n".join(weekly_text), False)
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='redeem', aliases=['coupon', 'code'])
+async def redeem_coupon_command(ctx, code: str = None):
+    """Redeem a coupon code for coins"""
+    user_id = str(ctx.author.id)
+    
+    if not code:
+        embed = create_info_embed("ð³ Redeem Coupon", 
+            f"Enter a coupon code to receive coins!\n\n"
+            f"**Usage:** `{PREFIX}redeem <code>`\n"
+            f"**Example:** `{PREFIX}redeem WELCOME2024`\n\n"
+            f"**Where to get codes:**\n"
+            f"â¢ Server events and giveaways\n"
+            f"â¢ Social media promotions\n"
+            f"â¢ Special announcements\n"
+            f"â¢ Community rewards\n\n"
+            f"ð¡ Codes are case-insensitive")
+        await ctx.send(embed=embed)
+        return
+    
+    # Redeem coupon
+    def redeem():
+        return redeem_coupon(code, user_id)
+    
+    success, message, coins = await run_in_executor(redeem)
+    
+    if success:
+        # Get new balance
+        def get_balance():
+            return get_user_coins(user_id)['balance']
+        
+        new_balance = await run_in_executor(get_balance)
+        
+        embed = create_success_embed("ð Coupon Redeemed!", 
+            f"You've successfully redeemed the coupon!\n\n"
+            f"**Code:** `{code.upper()}`\n"
+            f"**Coins Received:** +{coins:,} coins\n"
+            f"**New Balance:** {new_balance:,} coins\n\n"
+            f"ð° Enjoy your coins!")
+        
+        await ctx.send(embed=embed)
+        logger.info(f"User {ctx.author.name} redeemed coupon {code} for {coins} coins")
+    else:
+        embed = create_error_embed("â Redemption Failed", 
+            f"{message}\n\n"
+            f"**Code Entered:** `{code.upper()}`\n\n"
+            f"**Common Issues:**\n"
+            f"â¢ Code already used by you\n"
+            f"â¢ Code has expired\n"
+            f"â¢ Code has reached usage limit\n"
+            f"â¢ Invalid or disabled code\n\n"
+            f"ð¡ Check for typos and try again!")
+        await ctx.send(embed=embed)
+
+@bot.command(name='shop', aliases=['store', 'buy'])
+async def shop_command(ctx, item_id: int = None):
+    """View or purchase from the coin shop"""
+    user_id = str(ctx.author.id)
+    
+    if item_id is None:
+        # Show shop - run in executor
+        def get_shop_data():
+            items = get_shop_items()
+            coins_data = get_user_coins(user_id)
+            return items, coins_data
+        
+        items, coins_data = await run_in_executor(get_shop_data)
+        
+        embed = create_embed("ð Coin Shop", "Purchase items with your coins!", 0xe74c3c)
+        
+        # Group by type
+        types = {}
+        for item in items:
+            t = item['item_type']
+            if t not in types:
+                types[t] = []
+            types[t].append(item)
+        
+        for item_type, type_items in types.items():
+            items_text = []
+            for item in type_items[:5]:
+                stock_text = f" (Stock: {item['stock']})" if item['stock'] != -1 else ""
+                items_text.append(
+                    f"{item['icon']} **[{item['id']}]** {item['name']}{stock_text}\n"
+                    f"   {item['description']}\n"
+                    f"   Price: **{item['price']:,} coins**"
+                )
+            
+            add_field(embed, f"ð¦ {item_type.replace('_', ' ').title()}", 
+                     "\n\n".join(items_text), False)
+        
+        add_field(embed, "ð° Your Balance", f"{coins_data['balance']:,} coins", False)
+        add_field(embed, "ð¡ How to Buy", f"Use `{PREFIX}shop <item_id>` to purchase", False)
+        
+        await ctx.send(embed=embed)
+    else:
+        # Purchase item - run in executor
+        def process_purchase():
+            success, message, item = purchase_item(user_id, item_id)
+            if success:
+                coins_data = get_user_coins(user_id)
+                return success, message, item, coins_data
+            return success, message, item, None
+        
+        success, message, item, coins_data = await run_in_executor(process_purchase)
+        
+        if not success:
+            await ctx.send(embed=create_error_embed("Purchase Failed", message))
+            return
+        
+        # Process item effects
+        item_data = json.loads(item['item_data']) if item['item_data'] else {}
+        
+        if item['item_type'] == 'booster':
+            multiplier = item_data.get('multiplier', 2.0)
+            duration = item_data.get('duration', 3600)
+            await run_in_executor(activate_booster, user_id, multiplier, duration)
+            
+            hours = duration // 3600
+            effect_msg = f"**{multiplier}x** coin earnings for **{hours} hour(s)**!"
+        
+        elif item['item_type'] == 'vps_extension':
+            days = item_data.get('days', 3)
+            effect_msg = f"VPS extended by **{days} days**! Use `{PREFIX}myvps` to see."
+        
+        
+        else:
+            effect_msg = "Item purchased! Check your inventory."
+        
+        embed = create_success_embed("â Purchase Successful!", 
+            f"You bought: **{item['name']}**\n\n"
+            f"{effect_msg}\n\n"
+            f"**New Balance:** {coins_data['balance']:,} coins")
+        
+        await ctx.send(embed=embed)
+
+@bot.command(name='work', aliases=['job'])
+async def work_command(ctx):
+    """Work to earn coins - Non-blocking version"""
+    user_id = str(ctx.author.id)
+    
+    # SECURITY: Check if user is restricted
+    if is_user_restricted(user_id):
+        await ctx.send(embed=create_error_embed("â Access Restricted",
+            "Your account has been restricted from earning coins due to suspicious activity.\n"
+            "Contact an administrator for more information."))
+        return
+    
+    # SECURITY: Rate limit check (max 7 work attempts per hour to prevent spam)
+    allowed, remaining = check_rate_limit(user_id, 'work_attempt', 7, 60)
+    if not allowed:
+        log_security_event(user_id, 'work_spam',
+                         'Excessive work command attempts',
+                         'medium')
+        await ctx.send(embed=create_error_embed("â° Slow Down",
+            f"You're trying to work too frequently. Please wait {remaining}s before trying again."))
+        return
+    
+    # Run blocking operations in executor
+    def do_work():
+        try:
+            success, earnings, message = work_for_coins(user_id)
+            if not success:
+                return False, None, message, None
+            
+            coins_data = get_user_coins(user_id)
+            
+            # Get job info
+            conn = get_db()
+            cur = conn.cursor()
+            cur.execute('SELECT * FROM user_jobs WHERE user_id = ?', (user_id,))
+            job_row = cur.fetchone()
+            job_data = dict(job_row) if job_row else None
+            conn.close()
+            
+            return True, coins_data, message, job_data
+        except Exception as e:
+            logger.error(f"Error in work command: {e}")
+            return False, None, f"Error: {str(e)}", None
+    
+    # Run in executor to not block
+    success, coins_data, message, job_data = await run_in_executor(do_work)
+    
+    if not success:
+        embed = create_warning_embed("â° Work Cooldown", message)
+        await ctx.send(embed=embed)
+        return
+    
+    embed = create_success_embed("âï¸ Work Complete!", message)
+    if job_data:
+        add_field(embed, "ð¼ Job", f"{job_data['current_job']} (Level {job_data['job_level']})", True)
+        add_field(embed, "ð Experience", f"{job_data['job_experience']}/{job_data['job_level'] * 100}", True)
+    add_field(embed, "ð° New Balance", f"{coins_data['balance']:,} coins", True)
+    add_field(embed, "â° Next Work", "Available in 4 hours", False)
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='gift', aliases=['givecoin', 'sendcoins'])
+async def gift_command(ctx, user: discord.Member, amount: int, *, message: str = None):
+    """Gift coins to another user"""
+    sender_id = str(ctx.author.id)
+    receiver_id = str(user.id)
+    
+    if amount <= 0:
+        await ctx.send(embed=create_error_embed("Invalid Amount", "Amount must be positive."))
+        return
+    
+    # Run in executor
+    def process_gift():
+        success, result_message = gift_coins(sender_id, receiver_id, amount, message)
+        if success:
+            sender_coins = get_user_coins(sender_id)
+            return success, result_message, sender_coins
+        return success, result_message, None
+    
+    success, result_message, sender_coins = await run_in_executor(process_gift)
+    
+    if not success:
+        await ctx.send(embed=create_error_embed("Gift Failed", result_message))
+        return
+    
+    embed = create_success_embed("ð Coins Gifted!", 
+        f"You sent **{amount:,} coins** to {user.mention}!\n"
+        f"Your new balance: **{sender_coins['balance']:,} coins**")
+    
+    if message:
+        add_field(embed, "ð Message", message, False)
+    
+    await ctx.send(embed=embed)
+    
+    # Notify receiver
+    try:
+        receiver_embed = create_success_embed("ð You Received Coins!", 
+            f"{ctx.author.mention} sent you **{amount:,} coins**!")
+        if message:
+            add_field(receiver_embed, "ð Message", message, False)
+        await user.send(embed=receiver_embed)
+    except:
+        pass
+
+@bot.command(name='streak', aliases=['streaks'])
+async def streak_command(ctx, user: discord.Member = None):
+    """View daily streak"""
+    target_user = user or ctx.author
+    user_id = str(target_user.id)
+    
+    # Run in executor
+    def get_streak_data():
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute('SELECT * FROM user_streaks WHERE user_id = ?', (user_id,))
+        row = cur.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    
+    streak_data = await run_in_executor(get_streak_data)
+    
+    if not streak_data:
+        embed = create_info_embed("ð¥ Daily Streak", 
+            f"{target_user.mention} hasn't started a streak yet!\n"
+            f"Use `{PREFIX}daily` to start your streak!")
+        await ctx.send(embed=embed)
+        return
+    
+    streak_data = dict(row)
+    
+    embed = create_embed("ð¥ Daily Streak", f"Streak info for {target_user.mention}", 0xff6b6b)
+    
+    add_field(embed, "ð¥ Current Streak", f"**{streak_data['current_streak']} days**", True)
+    add_field(embed, "â­ Longest Streak", f"**{streak_data['longest_streak']} days**", True)
+    add_field(embed, "ð° Bonus Multiplier", f"**{streak_data['streak_bonus_multiplier']:.1f}x**", True)
+    
+    # Calculate next milestone
+    milestones = [7, 14, 30, 60, 100, 365]
+    next_milestone = next((m for m in milestones if m > streak_data['current_streak']), None)
+    
+    if next_milestone:
+        days_to_milestone = next_milestone - streak_data['current_streak']
+        add_field(embed, "ð¯ Next Milestone", 
+            f"{next_milestone} days (in {days_to_milestone} days)", False)
+    
+    add_field(embed, "ð¡ Tip", 
+        f"Claim `{PREFIX}daily` every day to maintain your streak!\n"
+        f"Higher streaks = bigger bonuses!", False)
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='booster', aliases=['boosters', 'boost'])
+async def booster_command(ctx):
+    """View active boosters"""
+    user_id = str(ctx.author.id)
+    
+    # Run in executor
+    booster = await run_in_executor(get_active_booster, user_id)
+    
+    if not booster:
+        embed = create_info_embed("â¡ No Active Booster", 
+            f"You don't have any active boosters.\n\n"
+            f"Purchase boosters from the shop:\n"
+            f"`{PREFIX}shop`")
+        await ctx.send(embed=embed)
+        return
+    
+    expires_at = datetime.fromisoformat(booster['expires_at'])
+    time_left = expires_at - datetime.now()
+    hours = int(time_left.total_seconds() // 3600)
+    minutes = int((time_left.total_seconds() % 3600) // 60)
+    
+    embed = create_embed("â¡ Active Booster", "Your coin earnings are boosted!", 0x00ff88)
+    
+    add_field(embed, "ð Multiplier", f"**{booster['multiplier']}x** coins", True)
+    add_field(embed, "â° Time Left", f"**{hours}h {minutes}m**", True)
+    add_field(embed, "ð Expires", expires_at.strftime('%Y-%m-%d %H:%M'), True)
+    
+    add_field(embed, "ð¡ Tip", 
+        "All coin earnings are multiplied while booster is active!\n"
+        "Stack activities for maximum gains!", False)
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='profile', aliases=['me'])
+async def profile_command(ctx, user: discord.Member = None):
+    """View detailed user profile"""
+    target_user = user or ctx.author
+    user_id = str(target_user.id)
+    
+    # Run in executor
+    def get_profile_data():
+        coins_data = get_user_coins(user_id)
+        achievements = get_user_achievements(user_id)
+        
+        # Get streak
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute('SELECT current_streak FROM user_streaks WHERE user_id = ?', (user_id,))
+        streak_row = cur.fetchone()
+        current_streak = streak_row[0] if streak_row else 0
+        
+        # Get job
+        cur.execute('SELECT * FROM user_jobs WHERE user_id = ?', (user_id,))
+        job_row = cur.fetchone()
+        job_data = dict(job_row) if job_row else None
+        
+        # Get rank
+        cur.execute('''SELECT COUNT(*) + 1 FROM user_coins 
+                       WHERE balance > (SELECT balance FROM user_coins WHERE user_id = ?)''',
+                   (user_id,))
+        rank = cur.fetchone()[0]
+        
+        conn.close()
+        
+        # Get booster
+        booster = get_active_booster(user_id)
+        
+        return coins_data, achievements, current_streak, job_data, rank, booster
+    
+    coins_data, achievements, current_streak, job_data, rank, booster = await run_in_executor(get_profile_data)
+    
+    # Get VPS count
+    vps_count = len(vps_data.get(user_id, []))
+    
+    embed = create_embed("ð¤ User Profile", f"Profile for {target_user.mention}", 0x3498db)
+    
+    # Row 1
+    add_field(embed, "ð° Balance", f"{coins_data['balance']:,} coins", True)
+    add_field(embed, "ð Rank", f"#{rank}", True)
+    add_field(embed, "ð¥ Streak", f"{current_streak} days", True)
+    
+    # Row 2
+    add_field(embed, "ð Total Earned", f"{coins_data['total_earned']:,} coins", True)
+    add_field(embed, "ð Total Spent", f"{coins_data['total_spent']:,} coins", True)
+    add_field(embed, "ð Achievements", f"{len(achievements)}", True)
+    
+    # Activity
+    add_field(embed, "ð Activity Stats",
+        f"ð¥ Invites: {coins_data['invite_count']}\n"
+        f"ð¬ Messages: {coins_data['message_count']}\n"
+        f"ð¤ Voice: {coins_data['voice_minutes']} min\n"
+        f"ð¥ï¸ VPS: {vps_count}", True)
+    
+    # Job
+    if job_data:
+        add_field(embed, "ð¼ Job",
+            f"{job_data['current_job']}\n"
+            f"Level {job_data['job_level']}\n"
+            f"Worked {job_data['total_work_count']} times", True)
+    
+    # Booster
+    if booster:
+        add_field(embed, "â¡ Active Booster",
+            f"{booster['multiplier']}x earnings", True)
+    
+    await ctx.send(embed=embed)
 
 @bot.command(name='quickhelp')
 async def quick_help(ctx):
@@ -4898,41 +8880,41 @@ async def quick_help(ctx):
     user_id = str(ctx.author.id)
     is_admin_user = user_id == str(MAIN_ADMIN_ID) or user_id in admin_data.get("admins", [])
     
-    embed = create_info_embed("🚀 Quick Help Reference", 
-        f"Quick reference for common tasks. Use `{PREFIX}help` for complete command list.")
+    embed = create_info_embed("ð Quick Help Reference", 
+        "Quick reference for common tasks. Use `!help` for complete command list.")
     
     # Common user tasks
-    add_field(embed, "👤 For Users", 
-        f"• `{PREFIX}myvps` - List your VPS\n"
-        f"• `{PREFIX}manage` - Start/stop/manage VPS\n"
-        f"• `{PREFIX}ports` - Manage port forwarding\n"
-        f"• `{PREFIX}share-user @user 1` - Share VPS #1\n"
-        f"• `{PREFIX}about` - Bot information", False)
+    add_field(embed, "ð¤ For Users", 
+        "â¢ `!myvps` - List your VPS\n"
+        "â¢ `!manage` - Start/stop/manage VPS\n"
+        "â¢ `!ports` - Manage port forwarding\n"
+        "â¢ `!share-user @user 1` - Share VPS #1\n"
+        "â¢ `!about` - Bot information", False)
     
     # VPS management
-    add_field(embed, "🖥️ VPS Control", 
-        f"• In `{PREFIX}manage`: Click ▶ to start VPS\n"
-        f"• In `{PREFIX}manage`: Click ⏸ to stop VPS\n"
-        f"• In `{PREFIX}manage`: Click 🔑 for SSH access\n"
-        f"• In `{PREFIX}manage`: Click 📊 for live stats\n"
-        f"• In `{PREFIX}manage`: Click 🔄 to reinstall OS", False)
+    add_field(embed, "ð¥ï¸ VPS Control", 
+        "â¢ In `!manage`: Click â¶ to start VPS\n"
+        "â¢ In `!manage`: Click â¸ to stop VPS\n"
+        "â¢ In `!manage`: Click ð for SSH access\n"
+        "â¢ In `!manage`: Click ð for live stats\n"
+        "â¢ In `!manage`: Click ð to reinstall OS", False)
     
     # Troubleshooting
-    add_field(embed, "🔧 Common Issues", 
-        f"• Ports not working? Use `{PREFIX}repair-ports <container>` (admin)\n"
-        "• VPS suspended? Contact admin to unsuspend\n"
-        "• Need more resources? Contact admin for upgrade\n"
-        "• SSH not working? Try reinstall with different OS", False)
+    add_field(embed, "ð§ Common Issues", 
+        "â¢ Ports not working? Use `!repair-ports <container>` (admin)\n"
+        "â¢ VPS suspended? Contact admin to unsuspend\n"
+        "â¢ Need more resources? Contact admin for upgrade\n"
+        "â¢ SSH not working? Try reinstall with different OS", False)
     
     if is_admin_user:
-        add_field(embed, "🛡️ Admin Quick Actions", 
-            f"• `{PREFIX}create 2 2 20 @user` - Create 2GB/2CPU/20GB VPS\n"
-            f"• `{PREFIX}userinfo @user` - Check user details\n"
-            f"• `{PREFIX}node list` - List all nodes\n"
-            f"• `{PREFIX}serverstats` - System overview\n"
-            f"• `{PREFIX}suspend-vps <container> <reason>` - Suspend VPS", False)
+        add_field(embed, "ð¡ï¸ Admin Quick Actions", 
+            "â¢ `!create 2 2 20 @user` - Create 2GB/2CPU/20GB VPS\n"
+            "â¢ `!userinfo @user` - Check user details\n"
+            "â¢ `!node list` - List all nodes\n"
+            "â¢ `!serverstats` - System overview\n"
+            "â¢ `!suspend-vps <container> <reason>` - Suspend VPS", False)
     
-    embed.set_footer(text=f"Made by Hopingboyz • Use {PREFIX}help for complete command list")
+    embed.set_footer(text=f"{BOT_NAME} VPS Manager â¢ Use !help for complete command list")
     await ctx.send(embed=embed)
 
 @bot.command(name='help-search')
@@ -4971,13 +8953,13 @@ async def help_search(ctx, *, search_term: str = None):
             matches.append((cmd, desc))
     
     if not matches:
-        embed = create_info_embed("🔍 No Results Found",
+        embed = create_info_embed("ð No Results Found",
             f"No commands found matching '{search_term}'. Try a different search term.")
         await ctx.send(embed=embed)
         return
     
     # Show results
-    embed = create_info_embed(f"🔍 Search Results for '{search_term}'",
+    embed = create_info_embed(f"ð Search Results for '{search_term}'",
         f"Found {len(matches)} command(s) matching your search.")
     
     # Group matches by category
@@ -4987,7 +8969,7 @@ async def help_search(ctx, *, search_term: str = None):
     if len(matches) > 15:
         add_field(embed, "Note", f"Showing 15 of {len(matches)} matches. Try a more specific search.", False)
     
-    embed.set_footer(text=f"Made by Hopingboyz • Use {PREFIX}help for complete list")
+    embed.set_footer(text=f"{BOT_NAME} VPS Manager â¢ Use !help for complete list")
     await ctx.send(embed=embed)    
 
 @bot.command(name='node')
@@ -5011,17 +8993,9 @@ async def node_cmd(ctx, sub: str, *args):
         tags_str = (await bot.wait_for('message', check=check)).content.strip()
         tags = [t.strip() for t in tags_str.split(',') if t.strip()]
         tags_json = json.dumps(tags)
-        await ctx.send("Enter node URL (e.g., http://ip:port or https://ip:port) or leave blank for local:")
+        await ctx.send("Enter node URL (e.g., http://ip:port) or leave blank for local:")
         url_str = (await bot.wait_for('message', check=check)).content.strip()
-        
-        # Normalize URL if provided
-        if url_str:
-            if not url_str.startswith('http://') and not url_str.startswith('https://'):
-                url_str = f'http://{url_str}'
-            url = url_str
-        else:
-            url = None
-        
+        url = url_str if url_str else None
         is_local = 1 if not url else 0
         api_key = None if is_local else ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=32))
         conn = get_db()
@@ -5087,54 +9061,22 @@ async def node_cmd(ctx, sub: str, *args):
         new_tags = (await bot.wait_for('message', check=check)).content.strip()
         if new_tags != '.':
             node['tags'] = json.dumps([t.strip() for t in new_tags.split(',') if t.strip()])
-        
-        # NEW: Add conversion option between Local and Dynamic
-        if node['is_local']:
-            await ctx.send("Convert Local Node to Dynamic URL-based Node? (y/n):")
-            convert = (await bot.wait_for('message', check=check)).content.strip().lower()
-            if convert == 'y':
-                await ctx.send("Enter node URL (e.g., http://ip:port or https://ip:port):")
-                url_str = (await bot.wait_for('message', check=check)).content.strip()
-                if not url_str:
-                    await ctx.send(embed=create_error_embed("Error", "URL cannot be empty for dynamic node."))
-                    return
-                
-                # Normalize URL - add http:// if not present
-                if not url_str.startswith('http://') and not url_str.startswith('https://'):
-                    url_str = f'http://{url_str}'
-                
-                node['url'] = url_str
-                node['is_local'] = 0
+        if not node['is_local']:
+            await ctx.send("New URL ( . to skip):")
+            new_url = (await bot.wait_for('message', check=check)).content.strip()
+            if new_url != '.':
+                node['url'] = new_url
+            await ctx.send("Regenerate API key? (y/n):")
+            regen = (await bot.wait_for('message', check=check)).content.strip().lower()
+            if regen == 'y':
                 node['api_key'] = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=32))
-                await ctx.send(f"✅ Node converted to Dynamic!\n\n**URL:** `{url_str}`\n**Generated API Key:** `{node['api_key']}`\n\n**Setup Command:**\n```\npython node-agent.py --api_key={node['api_key']} --port=PORT\n```")
-        else:
-            await ctx.send("Convert Dynamic Node to Local? (y/n):")
-            convert = (await bot.wait_for('message', check=check)).content.strip().lower()
-            if convert == 'y':
-                node['url'] = None
-                node['api_key'] = None
-                node['is_local'] = 1
-                await ctx.send("✅ Node converted to Local!")
-            else:
-                await ctx.send("New URL ( . to skip):")
-                new_url = (await bot.wait_for('message', check=check)).content.strip()
-                if new_url != '.':
-                    # Normalize URL - add http:// if not present
-                    if not new_url.startswith('http://') and not new_url.startswith('https://'):
-                        new_url = f'http://{new_url}'
-                    node['url'] = new_url
-                await ctx.send("Regenerate API key? (y/n):")
-                regen = (await bot.wait_for('message', check=check)).content.strip().lower()
-                if regen == 'y':
-                    node['api_key'] = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=32))
-        
         conn = get_db()
         cur = conn.cursor()
-        cur.execute('UPDATE nodes SET name=?, location=?, total_vps=?, tags=?, api_key=?, url=?, is_local=? WHERE id=?',
-                    (node['name'], node['location'], node['total_vps'], json.dumps(node['tags']), node.get('api_key'), node.get('url'), node['is_local'], node_id))
+        cur.execute('UPDATE nodes SET name=?, location=?, total_vps=?, tags=?, api_key=?, url=? WHERE id=?',
+                    (node['name'], node['location'], node['total_vps'], json.dumps(node['tags']), node.get('api_key'), node.get('url'), node_id))
         conn.commit()
         conn.close()
-        embed = create_success_embed("Node Updated", f"ID: {node_id}\nName: {node['name']}\nLocation: {node['location']}\nCapacity: {node['total_vps']}\nTags: {', '.join(node['tags'])}\nType: {'Local' if node['is_local'] else 'Dynamic'}")
+        embed = create_success_embed("Node Updated", f"ID: {node_id}\nName: {node['name']}\nLocation: {node['location']}\nCapacity: {node['total_vps']}\nTags: {', '.join(node['tags'])}")
         if not node['is_local']:
             add_field(embed, "API Key", node['api_key'], False)
             add_field(embed, "URL", node['url'], False)
@@ -5184,7 +9126,7 @@ async def node_cmd(ctx, sub: str, *args):
             warning_msg += f"**WARNING: Force mode will delete all {vps_count} VPS on this node first!**\n\n"
         warning_msg += "This action cannot be undone!"
         
-        embed = create_warning_embed("⚠️ Delete Node", warning_msg)
+        embed = create_warning_embed("â ï¸ Delete Node", warning_msg)
         
         class ConfirmDelete(discord.ui.View):
             def __init__(self, node_id, node_name, force, vps_count):
@@ -5263,7 +9205,7 @@ async def node_cmd(ctx, sub: str, *args):
         embed = create_info_embed(f"Node Status - {node['name']}")
         
         if node['is_local']:
-            status = "🟢 Local Node"
+            status = "ð¢ Local Node"
             cpu_usage = get_host_cpu_usage()
             ram_usage = get_host_ram_usage()
             add_field(embed, "Status", status, True)
@@ -5273,7 +9215,7 @@ async def node_cmd(ctx, sub: str, *args):
             try:
                 response = requests.get(f"{node['url']}/api/ping", params={'api_key': node['api_key']}, timeout=5)
                 if response.status_code == 200:
-                    status = "🟢 Online"
+                    status = "ð¢ Online"
                     try:
                         stats_response = requests.get(f"{node['url']}/api/get_host_stats", 
                                                     params={'api_key': node['api_key']}, 
@@ -5288,9 +9230,9 @@ async def node_cmd(ctx, sub: str, *args):
                         cpu_usage = "Unknown"
                         ram_usage = "Unknown"
                 else:
-                    status = "🔴 Offline"
+                    status = "ð´ Offline"
             except:
-                status = "🔴 Offline"
+                status = "ð´ Offline"
             
             add_field(embed, "Status", status, True)
         
@@ -5307,100 +9249,6 @@ async def node_cmd(ctx, sub: str, *args):
         
         await ctx.send(embed=embed)
     
-    elif sub == 'regen-key':
-        # NEW: Regenerate API key for dynamic node
-        if not args:
-            await ctx.send(embed=create_error_embed("Usage", f"{PREFIX}node regen-key <id>"))
-            return
-        
-        try:
-            node_id = int(args[0])
-        except ValueError:
-            await ctx.send(embed=create_error_embed("Invalid ID", "Node ID must be an integer."))
-            return
-        
-        node = get_node(node_id)
-        if not node:
-            await ctx.send(embed=create_error_embed("Not Found", "Node not found."))
-            return
-        
-        # Check if node is local
-        if node['is_local']:
-            await ctx.send(embed=create_error_embed("Error", "Cannot regenerate API key for Local nodes. Only Dynamic nodes have API keys."))
-            return
-        
-        # Confirm regeneration
-        warning_embed = create_warning_embed("⚠️ Regenerate API Key", 
-            f"You are about to regenerate the API key for node **{node['name']}**.\n\n"
-            f"**Current API Key:** `{node['api_key']}`\n\n"
-            f"**This action will:**\n"
-            f"• Generate a new 32-character API key\n"
-            f"• Invalidate the old API key\n"
-            f"• Require updating the remote node agent\n\n"
-            f"Are you sure you want to continue?")
-        
-        class ConfirmRegenKey(discord.ui.View):
-            def __init__(self, node_id, node):
-                super().__init__(timeout=60)
-                self.node_id = node_id
-                self.node = node
-            
-            @discord.ui.button(label="Regenerate Key", style=discord.ButtonStyle.danger)
-            async def confirm(self, inter: discord.Interaction, item: discord.ui.Button):
-                if str(inter.user.id) != str(ctx.author.id):
-                    await inter.response.send_message(
-                        embed=create_error_embed("Access Denied", "Only the command author can confirm."),
-                        ephemeral=True
-                    )
-                    return
-                
-                await inter.response.defer()
-                
-                # Generate new API key
-                new_api_key = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=32))
-                
-                # Update database
-                conn = get_db()
-                cur = conn.cursor()
-                cur.execute('UPDATE nodes SET api_key=? WHERE id=?', (new_api_key, self.node_id))
-                conn.commit()
-                conn.close()
-                
-                # Create success embed with new key
-                success_embed = create_success_embed("✅ API Key Regenerated", 
-                    f"Node **{self.node['name']}** (ID: {self.node_id})")
-                
-                add_field(success_embed, "Old API Key", f"`{self.node['api_key']}`", False)
-                add_field(success_embed, "New API Key", f"`{new_api_key}`", False)
-                add_field(success_embed, "Node URL", self.node['url'], True)
-                
-                setup_command = f"python node-agent.py --api_key={new_api_key} --port=PORT"
-                add_field(success_embed, "Update Remote Agent", 
-                    f"SSH to the remote server and restart with:\n```\n{setup_command}\n```", False)
-                
-                add_field(success_embed, "⚠️ Important", 
-                    "The old API key is now invalid. Update your remote node agent immediately.", False)
-                
-                await inter.followup.send(embed=success_embed)
-                self.stop()
-            
-            @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
-            async def cancel(self, inter: discord.Interaction, item: discord.ui.Button):
-                if str(inter.user.id) != str(ctx.author.id):
-                    await inter.response.send_message(
-                        embed=create_error_embed("Access Denied", "Only the command author can cancel."),
-                        ephemeral=True
-                    )
-                    return
-                
-                await inter.response.edit_message(
-                    embed=create_info_embed("Cancelled", "API key regeneration was cancelled."),
-                    view=None
-                )
-                self.stop()
-        
-        await ctx.send(embed=warning_embed, view=ConfirmRegenKey(node_id, node))
-    
     else:
         # Show help for node command
         embed = create_info_embed("Node Management", 
@@ -5414,7 +9262,7 @@ class HelpView(discord.ui.View):
         # Command categories
         self.command_categories = {
             "user": {
-                "name": "👤 User Commands",
+                "name": "ð¤ User Commands",
                 "commands": [
                     (f"{PREFIX}ping", "Check bot latency"),
                     (f"{PREFIX}uptime", "Show host uptime"),
@@ -5425,24 +9273,79 @@ class HelpView(discord.ui.View):
                     (f"{PREFIX}manage-shared @owner <vps_number>", "Manage shared VPS")
                 ]
             },
+            "coins": {
+                "name": "ð° Coins & Economy",
+                "commands": [
+                    (f"{PREFIX}balance [@user]", "Check coin balance"),
+                    (f"{PREFIX}daily", "Claim daily reward with streak bonus"),
+                    (f"{PREFIX}work", "Work to earn coins (4h cooldown)"),
+                    (f"{PREFIX}leaderboard", "View top coin holders"),
+                    (f"{PREFIX}transactions [page]", "View transaction history"),
+                    (f"{PREFIX}renew <vps_number> <days>", "Renew VPS expiration with coins"),
+                    (f"{PREFIX}achievements [@user]", "View unlocked achievements"),
+                    (f"{PREFIX}quests", "View active daily/weekly quests"),
+                    (f"{PREFIX}shop [item_id]", "View/purchase from coin shop"),
+                    (f"{PREFIX}gift @user <amount> [message]", "Gift coins to another user"),
+                    (f"{PREFIX}streak [@user]", "View daily streak and bonuses"),
+                    (f"{PREFIX}booster", "View active coin boosters"),
+                    (f"{PREFIX}profile [@user]", "View detailed user profile"),
+                    (f"{PREFIX}coinhelp", "Learn how to earn coins"),
+                    (f"{PREFIX}givecoins @user <amount>", "Give coins to user (Admin only)"),
+                    (f"{PREFIX}removecoins @user <amount>", "Remove coins from user (Admin only)"),
+                    (f"{PREFIX}setcoins @user <amount>", "Set user's coin balance (Admin only)"),
+                    (f"{PREFIX}coinconfig <setting> <value>", "Configure coin system (Admin only)")
+                ]
+            },
+            "plans": {
+                "name": "ð Plans & Deployment",
+                "commands": [
+                    (f"{PREFIX}deploy-plans", "View all available VPS deployment plans"),
+                    (f"{PREFIX}resource-plans", "View all available resource upgrade plans"),
+                    (f"{PREFIX}deploy <plan_id>", "Deploy your own VPS using a plan (costs coins)"),
+                    (f"{PREFIX}upgrade <vps_number> <plan_id>", "Upgrade VPS resources with coins"),
+                    (f"{PREFIX}renewprices", "View VPS renewal pricing packages"),
+                    (f"{PREFIX}renewconfig [setting] [value]", "Configure renewal system (Admin only)"),
+                    (f"{PREFIX}admin-renew @user <vps_number> <days>", "Set VPS expiry without coins (Admin only)"),
+                    (f"{PREFIX}create-deploy-plan <name> <ram> <cpu> <disk> <days> <cost> [icon]", "Create deployment plan (Admin only)"),
+                    (f"{PREFIX}edit-deploy-plan <id> <field> <value>", "Edit deployment plan (Admin only)"),
+                    (f"{PREFIX}delete-deploy-plan <id>", "Delete deployment plan (Admin only)"),
+                    (f"{PREFIX}create-resource-plan <name> <ram> <cpu> <disk> <cost> [icon]", "Create resource plan (Admin only)"),
+                    (f"{PREFIX}edit-resource-plan <id> <field> <value>", "Edit resource plan (Admin only)"),
+                    (f"{PREFIX}delete-resource-plan <id>", "Delete resource plan (Admin only)"),
+                    (f"{PREFIX}list-deploy-plans", "List all deployment plans (Admin only)"),
+                    (f"{PREFIX}list-resource-plans", "List all resource plans (Admin only)")
+                ]
+            },
+            "coupons": {
+                "name": "ðï¸ Coupon System",
+                "commands": [
+                    (f"{PREFIX}redeem <code>", "Redeem a coupon code for coins"),
+                    (f"{PREFIX}create-coupon <coins> <code> [max_uses] [days]", "Create new coupon code (Admin only)"),
+                    (f"{PREFIX}list-coupons [all]", "List all coupon codes (Admin only)"),
+                    (f"{PREFIX}coupon-stats <id>", "View detailed coupon statistics (Admin only)"),
+                    (f"{PREFIX}disable-coupon <id>", "Disable a coupon code (Admin only)"),
+                    (f"{PREFIX}enable-coupon <id>", "Enable a disabled coupon (Admin only)"),
+                    (f"{PREFIX}delete-coupon <id>", "Delete coupon permanently (Admin only)")
+                ]
+            },
             "vps": {
-                "name": "🖥️ VPS Management",
+                "name": "ð¥ï¸ VPS Management",
                 "commands": [
                     (f"{PREFIX}myvps", "List your VPS"),
-                    (f"{PREFIX}vpsinfo [vps-id]", "Get VPS information by ID"),
-                    (f"{PREFIX}vps-stats <vps-id>", "Get VPS resource stats"),
-                    (f"{PREFIX}vps-uptime <vps-id>", "Get VPS uptime"),
-                    (f"{PREFIX}vps-processes <vps-id>", "List running processes in VPS"),
-                    (f"{PREFIX}vps-logs <vps-id> [lines]", "View VPS logs"),
-                    (f"{PREFIX}restart-vps <vps-id>", "Restart VPS"),
-                    (f"{PREFIX}clone-vps <vps-id> [new_name]", "Clone VPS by ID"),
-                    (f"{PREFIX}vps-password <vps-id>", "Get/reset VPS root password"),
-                    (f"{PREFIX}vps-network <vps-id>", "Show VPS network configuration"),
-                    (f"{PREFIX}status <vps-id>", "Get VPS status (running/stopped)")
+                    (f"{PREFIX}vpsinfo [container]", "VPS information"),
+                    (f"{PREFIX}vps-stats <container>", "VPS stats"),
+                    (f"{PREFIX}vps-uptime <container>", "VPS uptime"),
+                    (f"{PREFIX}vps-processes <container>", "List processes"),
+                    (f"{PREFIX}vps-logs <container> [lines]", "Show logs"),
+                    (f"{PREFIX}restart-vps <container>", "Restart VPS"),
+                    (f"{PREFIX}clone-vps <container> [new_name]", "Clone VPS"),
+                    (f"{PREFIX}snapshot <container> [snap_name]", "Create snapshot"),
+                    (f"{PREFIX}list-snapshots <container>", "List snapshots"),
+                    (f"{PREFIX}restore-snapshot <container> <snap_name>", "Restore snapshot")
                 ]
             },
             "ports": {
-                "name": "🔌 Port Forwarding",
+                "name": "ð Port Forwarding",
                 "commands": [
                     (f"{PREFIX}ports [add <vps_num> <port> | list | remove <id>]", "Manage port forwards (TCP/UDP)"),
                     (f"{PREFIX}ports-add-user <amount> @user", "Allocate port slots to user (Admin only)"),
@@ -5451,7 +9354,7 @@ class HelpView(discord.ui.View):
                 ]
             },
             "system": {
-                "name": "⚙️ System Commands",
+                "name": "âï¸ System Commands",
                 "commands": [
                     (f"{PREFIX}serverstats", "Server statistics"),
                     (f"{PREFIX}resource-check", "Check and suspend high-usage VPS (Admin only)"),
@@ -5462,13 +9365,12 @@ class HelpView(discord.ui.View):
                 ]
             },
             "nodes": {
-                "name": "🌐 Node Management",
+                "name": "ð Node Management",
                 "commands": [
                     (f"{PREFIX}node create", "Create a new node (Admin only)"),
                     (f"{PREFIX}node list", "List all nodes (Admin only)"),
                     (f"{PREFIX}node status <id>", "Check node status (Admin only)"),
-                    (f"{PREFIX}node edit <id>", "Edit node details or convert Local↔Dynamic (Admin only)"),
-                    (f"{PREFIX}node regen-key <id>", "Regenerate API key for Dynamic node (Admin only)"),
+                    (f"{PREFIX}node edit <id>", "Edit node details (Admin only)"),
                     (f"{PREFIX}node delete <id>", "Delete a node (Admin only)"),
                     (f"{PREFIX}node migrate <from> <to>", "Migrate VPS between nodes (Admin only)"),
                     (f"{PREFIX}lxc-list [node_id]", "List LXC containers on node (Admin only)")
@@ -5476,7 +9378,7 @@ class HelpView(discord.ui.View):
                 "admin_only": True
             },
             "bot": {
-                "name": "🤖 Bot Control",
+                "name": "ð¤ Bot Control",
                 "commands": [
                     (f"{PREFIX}ping", "Check bot latency"),
                     (f"{PREFIX}uptime", "Show host uptime"),
@@ -5485,55 +9387,29 @@ class HelpView(discord.ui.View):
                 ]
             },
             "admin": {
-                "name": "🛡️ Admin Commands",
+                "name": "ð¡ï¸ Admin Commands",
                 "commands": [
                     (f"{PREFIX}lxc-list", "List all LXC containers"),
-                    (f"{PREFIX}create <ram_gb> <cpu_cores> <disk_gb> @user [expiry_days]", "Create VPS with OS selection (optional expiry in days)"),
-                    (f"{PREFIX}delete-vps @user <vps-id> [reason]", "Delete user's VPS by ID"),
-                    (f"{PREFIX}add-resources <vps-id> [ram] [cpu] [disk]", "Add resources to VPS"),
-                    (f"{PREFIX}resize-vps <vps-id> [ram] [cpu] [disk]", "Resize VPS resources"),
-                    (f"{PREFIX}suspend-vps <vps-id> [reason]", "Suspend VPS by ID"),
-                    (f"{PREFIX}unsuspend-vps <vps-id>", "Unsuspend VPS by ID"),
-                    (f"{PREFIX}suspension-logs [vps-id]", "View suspension logs"),
-                    (f"{PREFIX}whitelist-vps <vps-id> <add|remove>", "Whitelist VPS from auto-suspend"),
+                    (f"{PREFIX}create <ram_gb> <cpu_cores> <disk_gb> @user", "Create VPS with OS selection"),
+                    (f"{PREFIX}delete-vps @user <vps_number> [reason]", "Delete user's VPS"),
+                    (f"{PREFIX}add-resources <container> [ram] [cpu] [disk]", "Add resources to VPS"),
+                    (f"{PREFIX}resize-vps <container> [ram] [cpu] [disk]", "Resize VPS resources"),
+                    (f"{PREFIX}suspend-vps <container> [reason]", "Suspend VPS"),
+                    (f"{PREFIX}unsuspend-vps <container>", "Unsuspend VPS"),
+                    (f"{PREFIX}suspension-logs [container]", "View suspension logs"),
+                    (f"{PREFIX}whitelist-vps <container> <add|remove>", "Whitelist VPS from auto-suspend"),
                     (f"{PREFIX}userinfo @user", "User information"),
                     (f"{PREFIX}list-all", "List all VPS"),
-                    (f"{PREFIX}exec <vps-id> <command>", "Execute command in VPS"),
-                    (f"{PREFIX}stop-vps-all", "Stop all VPS on system"),
-                    (f"{PREFIX}migrate-vps <vps-id> <pool>", "Migrate VPS to different storage pool"),
-                    (f"{PREFIX}vps-network <vps-id> <action> [value]", "Network management and configuration"),
-                    (f"{PREFIX}apply-permissions <vps-id>", "Apply Docker-ready permissions to VPS"),
-                    (f"{PREFIX}vps-password <vps-id>", "Get/reset VPS password by ID"),
-                    (f"{PREFIX}node-check <node_id>", "Check node health and status"),
-                    (f"{PREFIX}status <vps-id>", "Get VPS status"),
-                    (f"{PREFIX}status-summary", "Get summary of all VPS status"),
-                    (f"{PREFIX}repair-ports", "Repair port forwarding configuration"),
-                    (f"{PREFIX}resource-check", "Check and suspend high-usage VPS")
-                ],
-                "admin_only": True
-            },
-            "expiration": {
-                "name": "⏰ VPS Expiration",
-                "commands": [
-                    (f"{PREFIX}set-expiration <vps-id> <days>", "Set VPS expiration date (Admin only)"),
-                    (f"{PREFIX}renew-vps <vps-id> [days]", "Renew VPS expiration (Admin only)"),
-                    (f"{PREFIX}vps-expiration [vps-id]", "Check VPS expiration status (Admin only)")
-                ],
-                "admin_only": True
-            },
-            "maintenance": {
-                "name": "🔧 Maintenance & Monitoring",
-                "commands": [
-                    (f"{PREFIX}cpu-monitor <status|enable|disable>", "Resource monitor control (logging only)"),
-                    (f"{PREFIX}backup-db", "Backup VPS database (Admin only)"),
-                    (f"{PREFIX}repair-ports", "Repair port forwarding configuration (Admin only)"),
-                    (f"{PREFIX}node-check <node_id>", "Check node health and status (Admin only)"),
-                    (f"{PREFIX}resource-check", "Check and suspend high-usage VPS (Admin only)")
+                    (f"{PREFIX}exec <container> <command>", "Execute command"),
+                    (f"{PREFIX}stop-vps-all", "Stop all VPS"),
+                    (f"{PREFIX}migrate-vps <container> <pool>", "Migrate VPS"),
+                    (f"{PREFIX}vps-network <container> <action> [value]", "Network management"),
+                    (f"{PREFIX}apply-permissions <container>", "Apply Docker-ready permissions")
                 ],
                 "admin_only": True
             },
             "main_admin": {
-                "name": "👑 Main Admin Commands",
+                "name": "ð Main Admin Commands",
                 "commands": [
                     (f"{PREFIX}admin-add @user", "Add admin"),
                     (f"{PREFIX}admin-remove @user", "Remove admin"),
@@ -5557,7 +9433,7 @@ class HelpView(discord.ui.View):
         # Add all categories that user has access to
         options = []
         # Always show basic categories
-        basic_categories = ["user", "vps", "ports", "system", "bot"]
+        basic_categories = ["user", "coins", "plans", "coupons", "vps", "ports", "system", "bot"]
         for category in basic_categories:
             options.append(discord.SelectOption(
                 label=self.command_categories[category]["name"],
@@ -5580,16 +9456,6 @@ class HelpView(discord.ui.View):
                 value="admin",
                 emoji=self.get_category_emoji("admin")
             ))
-            options.append(discord.SelectOption(
-                label=self.command_categories["expiration"]["name"],
-                value="expiration",
-                emoji=self.get_category_emoji("expiration")
-            ))
-            options.append(discord.SelectOption(
-                label=self.command_categories["maintenance"]["name"],
-                value="maintenance",
-                emoji=self.get_category_emoji("maintenance")
-            ))
        
         if is_main_admin_user:
             options.append(discord.SelectOption(
@@ -5607,25 +9473,41 @@ class HelpView(discord.ui.View):
             await interaction.response.send_message("This menu is not for you!", ephemeral=True)
             return
         
-        self.current_category = interaction.data['values'][0]
-        self.update_embed()
-        await interaction.response.edit_message(embed=self.embed, view=self)
+        try:
+            self.current_category = interaction.data['values'][0]
+            self.update_embed()
+            
+            # Respond immediately to prevent timeout
+            await interaction.response.edit_message(embed=self.embed, view=self)
+        except discord.errors.NotFound:
+            # Interaction expired, try to send a new message
+            try:
+                await interaction.channel.send(embed=self.embed, view=self)
+            except:
+                pass
+        except Exception as e:
+            logger.error(f"Error in HelpView select_callback: {e}")
+            try:
+                await interaction.response.send_message("An error occurred. Please try again.", ephemeral=True)
+            except:
+                pass
 
     def get_category_emoji(self, category):
         """Get emoji for each category"""
         emojis = {
-            "user": "👤",
-            "vps": "🖥️",
-            "ports": "🔌",
-            "system": "⚙️",
-            "bot": "🤖",
-            "nodes": "🌐",
-            "admin": "🛡️",
-            "expiration": "⏰",
-            "maintenance": "🔧",
-            "main_admin": "👑"
+            "user": "ð¤",
+            "coins": "ð°",
+            "plans": "ð",
+            "coupons": "ðï¸",
+            "vps": "ð¥ï¸",
+            "ports": "ð",
+            "system": "âï¸",
+            "bot": "ð¤",
+            "nodes": "ð",
+            "admin": "ð¡ï¸",
+            "main_admin": "ð"
         }
-        return emojis.get(category, "📁")
+        return emojis.get(category, "ð")
    
     def update_embed(self):
         """Update the embed based on current category and user permissions"""
@@ -5633,36 +9515,38 @@ class HelpView(discord.ui.View):
         # Create embed with category-specific styling
         colors = {
             "user": 0x3498db, # Blue
+            "coins": 0xf1c40f, # Gold
+            "plans": 0xe91e63, # Pink/Magenta
+            "coupons": 0x9b59b6, # Purple
             "vps": 0x2ecc71, # Green
             "ports": 0xe74c3c, # Red
             "system": 0xf39c12, # Orange
             "bot": 0x9b59b6, # Purple
             "nodes": 0x1abc9c, # Teal
             "admin": 0xe67e22, # Carrot
-            "expiration": 0xff6b6b, # Coral red for expiration
-            "maintenance": 0x34495e, # Dark gray for maintenance
             "main_admin": 0xf1c40f # Yellow
         }
         color = colors.get(self.current_category, 0x1a1a1a)
        
-        title = f"📚 {BOT_NAME} Command Help - {category_data['name']}"
+        title = f"ð {BOT_NAME} Command Help - {category_data['name']}"
         description = f"**{category_data['name']}**\nUse the dropdown below to switch categories."
        
         # Add helpful tips based on category
         tips = {
-            "user": f"Tip: Use `{PREFIX}myvps` to see all your VPS and `{PREFIX}manage` to control them.",
-            "vps": f"Tip: Use `{PREFIX}manage` to control your VPS from Discord.",
+            "user": "Tip: Use `!myvps` to see all your VPS and `!manage` to control them.",
+            "coins": "Tip: Claim `!daily` every day to build your streak and earn bonus coins!",
+            "plans": "Tip: Start with a cheaper plan and upgrade later as you need more resources!",
+            "coupons": "Tip: Redeem coupon codes with `!redeem <code>` to get free coins!",
+            "vps": "Tip: Snapshots are useful before making major changes to your VPS.",
             "ports": "Tip: Port forwards work for both TCP and UDP protocols.",
             "system": "Tip: Set thresholds to monitor resource usage across nodes.",
-            "nodes": f"Tip: Use `{PREFIX}node list` to see all available nodes and their status.",
-            "admin": f"Tip: Always check `{PREFIX}userinfo @user` before modifying VPS.",
-            "expiration": "Tip: VPS are automatically suspended when they expire. Renew them to unsuspend.",
-            "maintenance": f"Tip: Use `{PREFIX}backup-db` regularly to backup your VPS database.",
+            "nodes": "Tip: Use `!node list` to see all available nodes and their status.",
+            "admin": "Tip: Always check `!userinfo @user` before modifying VPS.",
             "main_admin": "Tip: Be careful when adding/removing admin privileges."
         }
        
         if self.current_category in tips:
-            description += f"\n\n💡 {tips[self.current_category]}"
+            description += f"\n\nð¡ {tips[self.current_category]}"
        
         self.embed = create_embed(title, description, color)
        
@@ -5672,16 +9556,17 @@ class HelpView(discord.ui.View):
        
         # Add appropriate footer based on category
         footers = {
-            "user": f"{BOT_NAME} VPS Manager • User Commands • Need help? Contact admin",
-            "vps": f"{BOT_NAME} VPS Manager • VPS Management • Cloning",
-            "ports": f"{BOT_NAME} VPS Manager • Port Forwarding • TCP/UDP Support",
-            "system": f"{BOT_NAME} VPS Manager • System Monitoring • Resource Management",
-            "nodes": f"{BOT_NAME} VPS Manager • Multi-Node Management • Distributed Infrastructure",
-            "bot": f"{BOT_NAME} VPS Manager • Bot Control • Status Management",
-            "admin": f"{BOT_NAME} VPS Manager • Admin Panel • Restricted Access",
-            "expiration": f"{BOT_NAME} VPS Manager • VPS Expiration • Auto-Suspension",
-            "maintenance": f"{BOT_NAME} VPS Manager • System Maintenance • Database Backup & Repair",
-            "main_admin": f"{BOT_NAME} VPS Manager • Main Admin • Full System Control"
+            "user": f"{BOT_NAME} VPS Manager â¢ User Commands â¢ Need help? Contact admin",
+            "coins": f"{BOT_NAME} VPS Manager â¢ Coins & Economy â¢ Earn, Spend, Compete!",
+            "plans": f"{BOT_NAME} VPS Manager â¢ Plans & Deployment â¢ Flexible VPS Options",
+            "coupons": f"{BOT_NAME} VPS Manager â¢ Coupon System â¢ Redeem Codes for Coins",
+            "vps": f"{BOT_NAME} VPS Manager â¢ VPS Management â¢ Snapshots â¢ Cloning",
+            "ports": f"{BOT_NAME} VPS Manager â¢ Port Forwarding â¢ TCP/UDP Support",
+            "system": f"{BOT_NAME} VPS Manager â¢ System Monitoring â¢ Resource Management",
+            "nodes": f"{BOT_NAME} VPS Manager â¢ Multi-Node Management â¢ Distributed Infrastructure",
+            "bot": f"{BOT_NAME} VPS Manager â¢ Bot Control â¢ Status Management",
+            "admin": f"{BOT_NAME} VPS Manager â¢ Admin Panel â¢ Restricted Access",
+            "main_admin": f"{BOT_NAME} VPS Manager â¢ Main Admin â¢ Full System Control"
         }
        
         self.embed.set_footer(text=footers.get(self.current_category, f"{BOT_NAME} VPS Manager"))
@@ -5725,14 +9610,7 @@ async def info_alias(ctx, user: discord.Member = None):
         await ctx.send(embed=create_error_embed("Access Denied", "This command requires admin privileges."))
 # Run the bot
 if __name__ == "__main__":
-    if not DISCORD_TOKEN or DISCORD_TOKEN == 'your_discord_bot_token_here':
-        logger.error("❌ ERROR: No valid Discord token found!")
-        logger.error("Please update your .env file with a valid Discord bot token.")
-        logger.error("DISCORD_TOKEN in .env is currently set to: " + str(DISCORD_TOKEN))
-        exit(1)
-    try:
+    if DISCORD_TOKEN:
         bot.run(DISCORD_TOKEN)
-    except discord.errors.LoginFailure as e:
-        logger.error(f"❌ ERROR: Failed to login with Discord token: {e}")
-        logger.error("Please check your DISCORD_TOKEN in the .env file.")
-        exit(1)
+    else:
+        logger.error("No Discord token found in DISCORD_TOKEN environment variable.")
