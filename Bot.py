@@ -15,7 +15,7 @@ import sqlite3
 import random
 import requests
 from dotenv import load_dotenv
-from typing import Tuple
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -189,7 +189,7 @@ def init_db():
         duration_days INTEGER NOT NULL,
         cost_coins INTEGER NOT NULL,
         active INTEGER DEFAULT 1,
-        icon TEXT DEFAULT 'ð¦',
+        icon TEXT DEFAULT '📦',
         created_at TEXT NOT NULL
     )''')
     
@@ -203,7 +203,7 @@ def init_db():
         disk_gb INTEGER NOT NULL,
         upgrade_cost INTEGER NOT NULL,
         active INTEGER DEFAULT 1,
-        icon TEXT DEFAULT 'â¡',
+        icon TEXT DEFAULT '⚡',
         created_at TEXT NOT NULL
     )''')
     
@@ -305,11 +305,11 @@ def init_db():
     cur.execute('SELECT COUNT(*) as count FROM deploy_plans')
     if cur.fetchone()['count'] == 0:
         default_deploy_plans = [
-            ('Starter', 'Perfect for testing and learning', 1, 1, 10, 1, 1000, 'ð±'),
-            ('Basic', 'Good for small projects', 2, 1, 10, 1, 2000, 'ð¦'),
-            ('Standard', 'Balanced resources for most uses', 2, 2, 20, 7, 3000, 'âï¸'),
-            ('Pro', 'More power for demanding apps', 4, 2, 40, 7, 5000, 'ð'),
-            ('Premium', 'Maximum performance', 8, 4, 80, 30, 10000, 'ð'),
+            ('Starter', 'Perfect for testing and learning', 1, 1, 10, 1, 1000, '🌱'),
+            ('Basic', 'Good for small projects', 2, 1, 10, 1, 2000, '📦'),
+            ('Standard', 'Balanced resources for most uses', 2, 2, 20, 7, 3000, '⚙️'),
+            ('Pro', 'More power for demanding apps', 4, 2, 40, 7, 5000, '🚀'),
+            ('Premium', 'Maximum performance', 8, 4, 80, 30, 10000, '💎'),
         ]
         
         for name, desc, ram, cpu, disk, days, cost, icon in default_deploy_plans:
@@ -322,11 +322,11 @@ def init_db():
     cur.execute('SELECT COUNT(*) as count FROM resource_plans')
     if cur.fetchone()['count'] == 0:
         default_resource_plans = [
-            ('Micro', 'Minimal resources', 1, 1, 10, 500, 'ð¹'),
-            ('Small', 'Light workloads', 2, 1, 20, 1000, 'ð¸'),
-            ('Medium', 'Balanced performance', 4, 2, 40, 2000, 'â¡'),
-            ('Large', 'Heavy workloads', 8, 4, 80, 4000, 'ð¥'),
-            ('XLarge', 'Maximum power', 16, 8, 160, 8000, 'ð«'),
+            ('Micro', 'Minimal resources', 1, 1, 10, 500, '🔹'),
+            ('Small', 'Light workloads', 2, 1, 20, 1000, '🔸'),
+            ('Medium', 'Balanced performance', 4, 2, 40, 2000, '⚡'),
+            ('Large', 'Heavy workloads', 8, 4, 80, 4000, '🔥'),
+            ('XLarge', 'Maximum power', 16, 8, 160, 8000, '💫'),
         ]
         
         for name, desc, ram, cpu, disk, cost, icon in default_resource_plans:
@@ -373,7 +373,7 @@ def init_db():
         requirement_type TEXT NOT NULL,
         requirement_value INTEGER NOT NULL,
         reward_coins INTEGER NOT NULL,
-        icon TEXT DEFAULT 'ð',
+        icon TEXT DEFAULT '🏆',
         category TEXT DEFAULT 'general'
     )''')
     
@@ -430,7 +430,7 @@ def init_db():
         item_data TEXT,
         stock INTEGER DEFAULT -1,
         purchasable INTEGER DEFAULT 1,
-        icon TEXT DEFAULT 'ð'
+        icon TEXT DEFAULT '🛒'
     )''')
     
     # User purchases
@@ -497,18 +497,18 @@ def init_db():
     
     # Initialize default achievements
     default_achievements = [
-        ('First Steps', 'Earn your first coin', 'coins_earned', 1, 50, 'ð¯', 'beginner'),
-        ('Chatterbox', 'Send 100 messages', 'messages', 100, 100, 'ð¬', 'social'),
-        ('Voice Master', 'Spend 60 minutes in voice', 'voice_minutes', 60, 150, 'ð¤', 'social'),
-        ('Inviter', 'Invite 5 members', 'invites', 5, 200, 'ð¥', 'social'),
-        ('Rich', 'Accumulate 1000 coins', 'balance', 1000, 500, 'ð°', 'wealth'),
-        ('Millionaire', 'Accumulate 10000 coins', 'balance', 10000, 2000, 'ð', 'wealth'),
-        ('Dedicated', 'Maintain a 7-day streak', 'streak', 7, 300, 'ð¥', 'dedication'),
-        ('Loyal', 'Maintain a 30-day streak', 'streak', 30, 1000, 'â­', 'dedication'),
-        ('VPS Owner', 'Own a VPS', 'vps_count', 1, 100, 'ð¥ï¸', 'vps'),
-        ('Quest Master', 'Complete 10 quests', 'quests_completed', 10, 400, 'ð', 'quests'),
-        ('Generous', 'Gift 500 coins to others', 'coins_gifted', 500, 250, 'ð', 'social'),
-        ('Worker', 'Work 50 times', 'work_count', 50, 350, 'âï¸', 'work'),
+        ('First Steps', 'Earn your first coin', 'coins_earned', 1, 50, '🎯', 'beginner'),
+        ('Chatterbox', 'Send 100 messages', 'messages', 100, 100, '💬', 'social'),
+        ('Voice Master', 'Spend 60 minutes in voice', 'voice_minutes', 60, 150, '🎤', 'social'),
+        ('Inviter', 'Invite 5 members', 'invites', 5, 200, '👥', 'social'),
+        ('Rich', 'Accumulate 1000 coins', 'balance', 1000, 500, '💰', 'wealth'),
+        ('Millionaire', 'Accumulate 10000 coins', 'balance', 10000, 2000, '💎', 'wealth'),
+        ('Dedicated', 'Maintain a 7-day streak', 'streak', 7, 300, '🔥', 'dedication'),
+        ('Loyal', 'Maintain a 30-day streak', 'streak', 30, 1000, '⭐', 'dedication'),
+        ('VPS Owner', 'Own a VPS', 'vps_count', 1, 100, '🖥️', 'vps'),
+        ('Quest Master', 'Complete 10 quests', 'quests_completed', 10, 400, '📜', 'quests'),
+        ('Generous', 'Gift 500 coins to others', 'coins_gifted', 500, 250, '🎁', 'social'),
+        ('Worker', 'Work 50 times', 'work_count', 50, 350, '⚒️', 'work'),
     ]
     
     for name, desc, req_type, req_val, reward, icon, category in default_achievements:
@@ -534,12 +534,12 @@ def init_db():
     
     # Initialize shop items
     default_shop_items = [
-        ('2x Coin Booster (1 Hour)', 'Double coin earnings for 1 hour', 200, 'booster', '{"multiplier":2.0,"duration":3600}', -1, 'â¡'),
-        ('2x Coin Booster (24 Hours)', 'Double coin earnings for 24 hours', 1500, 'booster', '{"multiplier":2.0,"duration":86400}', -1, 'ð'),
-        ('3x Coin Booster (1 Hour)', 'Triple coin earnings for 1 hour', 500, 'booster', '{"multiplier":3.0,"duration":3600}', -1, 'ð«'),
-        ('Custom Username Color', 'Get a custom colored username', 1000, 'cosmetic', '{"type":"color"}', -1, 'ð¨'),
-        ('Custom Role', 'Get a custom role with your name', 2000, 'cosmetic', '{"type":"role"}', -1, 'ð'),
-        ('Lottery Ticket', 'Enter the weekly lottery draw', 50, 'lottery', '{"type":"ticket"}', -1, 'ï¿½'),
+        ('2x Coin Booster (1 Hour)', 'Double coin earnings for 1 hour', 200, 'booster', '{"multiplier":2.0,"duration":3600}', -1, '⚡'),
+        ('2x Coin Booster (24 Hours)', 'Double coin earnings for 24 hours', 1500, 'booster', '{"multiplier":2.0,"duration":86400}', -1, '🚀'),
+        ('3x Coin Booster (1 Hour)', 'Triple coin earnings for 1 hour', 500, 'booster', '{"multiplier":3.0,"duration":3600}', -1, '💫'),
+        ('Custom Username Color', 'Get a custom colored username', 1000, 'cosmetic', '{"type":"color"}', -1, '🎨'),
+        ('Custom Role', 'Get a custom role with your name', 2000, 'cosmetic', '{"type":"role"}', -1, '👑'),
+        ('Lottery Ticket', 'Enter the weekly lottery draw', 50, 'lottery', '{"type":"ticket"}', -1, '�'),
     ]
     
     for name, desc, price, item_type, item_data, stock, icon in default_shop_items:
@@ -1252,10 +1252,10 @@ def format_expiry_time(expires_at_str: str) -> Dict:
     """Format expiry time into human-readable format with status"""
     if not expires_at_str:
         return {
-            'text': 'â¾ï¸ Never',
+            'text': '♾️ Never',
             'status': 'permanent',
             'color': 0x00ff88,
-            'emoji': 'â¾ï¸',
+            'emoji': '♾️',
             'hours_left': float('inf')
         }
     
@@ -1265,10 +1265,10 @@ def format_expiry_time(expires_at_str: str) -> Dict:
     
     if time_left.total_seconds() <= 0:
         return {
-            'text': 'â EXPIRED',
+            'text': '❌ EXPIRED',
             'status': 'expired',
             'color': 0xff0000,
-            'emoji': 'â',
+            'emoji': '❌',
             'hours_left': 0
         }
     
@@ -1276,26 +1276,26 @@ def format_expiry_time(expires_at_str: str) -> Dict:
     days_left = time_left.days
     
     if days_left > 7:
-        status_text = f"â {days_left} days"
+        status_text = f"✅ {days_left} days"
         status = 'safe'
         color = 0x00ff88
-        emoji = 'â'
+        emoji = '✅'
     elif days_left > 1:
-        status_text = f"â ï¸ {days_left} days"
+        status_text = f"⚠️ {days_left} days"
         status = 'warning'
         color = 0xffaa00
-        emoji = 'â ï¸'
+        emoji = '⚠️'
     elif hours_left > 1:
-        status_text = f"ð¨ {int(hours_left)} hours"
+        status_text = f"🚨 {int(hours_left)} hours"
         status = 'critical'
         color = 0xff6600
-        emoji = 'ð¨'
+        emoji = '🚨'
     else:
         minutes_left = int(time_left.total_seconds() / 60)
-        status_text = f"â° {minutes_left} minutes"
+        status_text = f"⏰ {minutes_left} minutes"
         status = 'urgent'
         color = 0xff0000
-        emoji = 'â°'
+        emoji = '⏰'
     
     return {
         'text': status_text,
@@ -1745,7 +1745,7 @@ def work_for_coins(user_id: str):
     conn.commit()
     conn.close()
     
-    level_up_msg = f"\nð Level up! Now Level {new_level} {new_job}!" if new_level > job_data['job_level'] else ""
+    level_up_msg = f"\n🎉 Level up! Now Level {new_level} {new_job}!" if new_level > job_data['job_level'] else ""
     
     return True, earnings, f"You earned {earnings:,} coins!{level_up_msg}"
 
@@ -1760,31 +1760,11 @@ admin_data = {'admins': get_admins()}
 CPU_THRESHOLD = int(get_setting('cpu_threshold', 90))
 RAM_THRESHOLD = int(get_setting('ram_threshold', 90))
 
-# ============================================
-# MAINTENANCE MODE
-# ============================================
-MAINTENANCE_MODE = get_setting('maintenance_mode', '0') == '1'
-
-def is_admin_id(user_id: str) -> bool:
-    """Check if a user id is the main admin or a listed admin"""
-    return user_id == str(MAIN_ADMIN_ID) or user_id in admin_data.get("admins", [])
-
 # Bot setup
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
-
-@bot.check
-async def maintenance_mode_check(ctx):
-    """Block all commands for non-admins while maintenance mode is on"""
-    if MAINTENANCE_MODE and not is_admin_id(str(ctx.author.id)):
-        await ctx.send(embed=create_error_embed(
-            "ð ï¸ Maintenance Mode",
-            f"{BOT_NAME} is currently under maintenance. Please try again later."
-        ))
-        return False
-    return True
 
 # Resource monitoring settings (logging only)
 resource_monitor_active = True
@@ -1816,15 +1796,15 @@ class EmbedColors:
 
 class EmbedIcons:
     """Modern icon system for consistent branding"""
-    SUCCESS = "â"
-    ERROR = "â"
-    WARNING = "â "
-    INFO = "â¹"
-    LOADING = "â³"
-    PREMIUM = "â"
-    ARROW = "â"
-    BULLET = "â¢"
-    DIVIDER = "â"
+    SUCCESS = "✓"
+    ERROR = "✕"
+    WARNING = "⚠"
+    INFO = "ℹ"
+    LOADING = "⟳"
+    PREMIUM = "★"
+    ARROW = "→"
+    BULLET = "•"
+    DIVIDER = "─"
     
 def create_embed(title, description="", color=EmbedColors.PRIMARY, show_branding=True):
     """
@@ -1937,7 +1917,7 @@ def create_card_embed(title, description="", color=EmbedColors.DARK):
     embed = create_embed(title, description, color)
     return embed
 
-def format_progress_bar(current, maximum, length=10, filled="â", empty="â"):
+def format_progress_bar(current, maximum, length=10, filled="█", empty="░"):
     """
     Create a modern progress bar
     
@@ -1978,7 +1958,7 @@ def format_status_badge(status, online_text="Online", offline_text="Offline"):
     else:
         is_online = status.lower() in ['running', 'online', 'active', 'started']
     
-    indicator = "ð¢" if is_online else "ð´"
+    indicator = "🟢" if is_online else "🔴"
     text = online_text if is_online else offline_text
     
     return f"{indicator} **{text}**"
@@ -2000,7 +1980,7 @@ def format_metric(label, value, unit="", icon=""):
     unit_str = f" {unit}" if unit else ""
     return f"{icon_str}**{label}:** {value}{unit_str}"
 
-def create_divider(char="â", length=30):
+def create_divider(char="─", length=30):
     """Create a visual divider for embed sections"""
     return char * length
 
@@ -2596,8 +2576,8 @@ async def on_message(message):
             if random.random() < 0.1:
                 coins_data = get_user_coins(user_id)
                 if coins_data['balance'] % 100 == 0 and coins_data['balance'] > 0:
-                    embed = create_success_embed("ð° Milestone Reached!", 
-                        f"{message.author.mention} just reached **{coins_data['balance']} coins**! ð")
+                    embed = create_success_embed("💰 Milestone Reached!", 
+                        f"{message.author.mention} just reached **{coins_data['balance']} coins**! 🎉")
                     await message.channel.send(embed=embed, delete_after=10)
         except Exception as e:
             logger.error(f"Error in process_coin_reward: {e}")
@@ -2723,7 +2703,7 @@ async def on_member_join(member):
                     # Notify inviter
                     try:
                         inviter = await bot.fetch_user(int(inviter_id))
-                        embed = create_success_embed("ð Invite Reward!", 
+                        embed = create_success_embed("🎉 Invite Reward!", 
                             f"You earned **{coins_per_invite} coins** for inviting {member.mention}!\n"
                             f"New balance: **{new_balance:,} coins**")
                         await inviter.send(embed=embed)
@@ -2792,7 +2772,7 @@ async def on_voice_state_update(member, before, after):
                 
                 # Notify user
                 try:
-                    embed = create_success_embed("ð¤ Voice Reward!", 
+                    embed = create_success_embed("🎤 Voice Reward!", 
                         f"You earned **{coins_earned} coins** for {int(duration)} minutes in voice!\n"
                         f"New balance: **{new_balance} coins**")
                     await member.send(embed=embed)
@@ -2867,48 +2847,48 @@ async def expiration_checker_loop():
                     
                     # 24 hour warning
                     if 23 <= hours_left <= 25 and vps_id not in warned_24h:
-                        embed = create_warning_embed("â ï¸ VPS Expiring in 24 Hours!", 
+                        embed = create_warning_embed("⚠️ VPS Expiring in 24 Hours!", 
                             f"Your VPS `{container_name}` will expire in **24 hours**!\n\n"
                             f"**Expires:** {expires_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
                             f"**VPS ID:** {vps_id}\n\n"
                             f"**Renewal Options:**\n"
-                            f"â¢ 1 Day: {renewal_cost_1day} coins\n"
-                            f"â¢ 7 Days: {renewal_cost_7days} coins\n\n"
+                            f"• 1 Day: {renewal_cost_1day} coins\n"
+                            f"• 7 Days: {renewal_cost_7days} coins\n\n"
                             f"**Renew Now:** `{PREFIX}renew {vps_id} <days>`\n"
                             f"**Check Balance:** `{PREFIX}balance`")
-                        embed.set_footer(text=f"{BOT_NAME} â¢ VPS Expiration Warning")
+                        embed.set_footer(text=f"{BOT_NAME} • VPS Expiration Warning")
                         await user.send(embed=embed)
                         warned_24h.add(vps_id)
                         logger.info(f"Sent 24h warning to user {user_id} for VPS {container_name}")
                     
                     # 12 hour warning
                     elif 11 <= hours_left <= 13 and vps_id not in warned_12h:
-                        embed = create_warning_embed("ð¨ VPS Expiring in 12 Hours!", 
+                        embed = create_warning_embed("🚨 VPS Expiring in 12 Hours!", 
                             f"**URGENT:** Your VPS `{container_name}` will expire in **12 hours**!\n\n"
                             f"**Expires:** {expires_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
                             f"**VPS ID:** {vps_id}\n\n"
                             f"**Renewal Options:**\n"
-                            f"â¢ 1 Day: {renewal_cost_1day} coins\n"
-                            f"â¢ 7 Days: {renewal_cost_7days} coins\n\n"
+                            f"• 1 Day: {renewal_cost_1day} coins\n"
+                            f"• 7 Days: {renewal_cost_7days} coins\n\n"
                             f"**Renew Now:** `{PREFIX}renew {vps_id} <days>`\n"
                             f"**Earn Coins:** `{PREFIX}daily`, `{PREFIX}work`")
-                        embed.set_footer(text=f"{BOT_NAME} â¢ URGENT Expiration Warning")
+                        embed.set_footer(text=f"{BOT_NAME} • URGENT Expiration Warning")
                         await user.send(embed=embed)
                         warned_12h.add(vps_id)
                         logger.info(f"Sent 12h warning to user {user_id} for VPS {container_name}")
                     
                     # 1 hour warning
                     elif 0.5 <= hours_left <= 1.5 and vps_id not in warned_1h:
-                        embed = create_error_embed("â° VPS EXPIRING IN 1 HOUR!", 
+                        embed = create_error_embed("⏰ VPS EXPIRING IN 1 HOUR!", 
                             f"**CRITICAL:** Your VPS `{container_name}` will expire in **1 hour**!\n\n"
                             f"**Expires:** {expires_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
                             f"**VPS ID:** {vps_id}\n\n"
                             f"**After expiration, your VPS will be SUSPENDED!**\n\n"
                             f"**Quick Renewal:**\n"
-                            f"â¢ 1 Day: {renewal_cost_1day} coins â `{PREFIX}renew {vps_id} 1`\n"
-                            f"â¢ 7 Days: {renewal_cost_7days} coins â `{PREFIX}renew {vps_id} 7`\n\n"
+                            f"• 1 Day: {renewal_cost_1day} coins → `{PREFIX}renew {vps_id} 1`\n"
+                            f"• 7 Days: {renewal_cost_7days} coins → `{PREFIX}renew {vps_id} 7`\n\n"
                             f"**Check Balance:** `{PREFIX}balance`")
-                        embed.set_footer(text=f"{BOT_NAME} â¢ CRITICAL Expiration Warning")
+                        embed.set_footer(text=f"{BOT_NAME} • CRITICAL Expiration Warning")
                         await user.send(embed=embed)
                         warned_1h.add(vps_id)
                         logger.info(f"Sent 1h warning to user {user_id} for VPS {container_name}")
@@ -2952,7 +2932,7 @@ async def on_command_error(ctx, error):
 # SECURITY HELPER FUNCTIONS
 # ============================================
 
-def check_rate_limit(user_id: str, action_type: str, max_actions: int, window_minutes: int) -> Tuple[bool, int]:
+def check_rate_limit(user_id: str, action_type: str, max_actions: int, window_minutes: int) -> tuple[bool, int]:
     """
     Check if user has exceeded rate limit for an action
     Returns: (is_allowed, remaining_seconds)
@@ -3108,7 +3088,7 @@ def is_user_restricted(user_id: str) -> bool:
 async def notify_admins_security(title: str, description: str, user_id: str = None):
     """Notify admins of security events"""
     try:
-        embed = create_error_embed(f"ð¨ Security Alert: {title}", description)
+        embed = create_error_embed(f"🚨 Security Alert: {title}", description)
         
         if user_id:
             add_field(embed, "User ID", f"<@{user_id}> ({user_id})", False)
@@ -3144,22 +3124,22 @@ async def ping(ctx):
     if latency < 100:
         quality = "Excellent"
         color = EmbedColors.SUCCESS
-        emoji = "ð¢"
+        emoji = "🟢"
     elif latency < 200:
         quality = "Good"
         color = EmbedColors.INFO
-        emoji = "ð¡"
+        emoji = "🟡"
     else:
         quality = "Poor"
         color = EmbedColors.WARNING
-        emoji = "ð´"
+        emoji = "🔴"
     
     embed = create_embed("Connection Status", color=color)
     
     # Main metrics
     add_field(embed, "Latency", f"{emoji} **{latency}ms** ({quality})", True)
     add_field(embed, "Status", format_status_badge(True, "Operational"), True)
-    add_field(embed, "Uptime", f"ð {get_uptime()}", True)
+    add_field(embed, "Uptime", f"🕐 {get_uptime()}", True)
     
     await ctx.send(embed=embed)
 
@@ -3171,8 +3151,8 @@ async def uptime(ctx):
     embed = create_info_embed("System Uptime", show_icon=False)
     embed.set_thumbnail(url="https://i.imgur.com/dpatuSj.png")
     
-    add_field(embed, "ð Host Uptime", f"```{up}```", False)
-    add_field(embed, "ð Status", "All systems operational", False)
+    add_field(embed, "🕐 Host Uptime", f"```{up}```", False)
+    add_field(embed, "📊 Status", "All systems operational", False)
     
     await ctx.send(embed=embed)
 
@@ -3182,9 +3162,9 @@ async def thresholds(ctx):
     """View current resource monitoring thresholds"""
     embed = create_card_embed("Resource Thresholds", "Current monitoring limits for auto-suspension")
     
-    add_field(embed, "ð´ CPU Threshold", f"```{CPU_THRESHOLD}%```", True)
-    add_field(embed, "ðµ RAM Threshold", f"```{RAM_THRESHOLD}%```", True)
-    add_field(embed, "âï¸ Action", "Auto-suspend on exceed", True)
+    add_field(embed, "🔴 CPU Threshold", f"```{CPU_THRESHOLD}%```", True)
+    add_field(embed, "🔵 RAM Threshold", f"```{RAM_THRESHOLD}%```", True)
+    add_field(embed, "⚙️ Action", "Auto-suspend on exceed", True)
     
     await ctx.send(embed=embed)
 
@@ -3247,7 +3227,7 @@ async def reload_env(ctx):
         set_setting('cpu_threshold', str(CPU_THRESHOLD))
         set_setting('ram_threshold', str(RAM_THRESHOLD))
         
-        embed = create_success_embed("â Configuration Reloaded", 
+        embed = create_success_embed("✅ Configuration Reloaded", 
             f"Successfully reloaded .env configuration!\n\n"
             f"**Bot Name:** {BOT_NAME}\n"
             f"**Prefix:** {PREFIX}\n"
@@ -3296,7 +3276,7 @@ async def cleanup_shop(ctx):
         total_deleted = deleted_upgrades + deleted_extensions + deleted_by_name
         
         if total_deleted > 0:
-            embed = create_success_embed("â Shop Cleaned Up",
+            embed = create_success_embed("✅ Shop Cleaned Up",
                 f"Removed **{total_deleted}** VPS-related item(s) from the shop.\n\n"
                 f"**VPS Upgrades:** {deleted_upgrades}\n"
                 f"**VPS Extensions:** {deleted_extensions}\n"
@@ -3305,7 +3285,7 @@ async def cleanup_shop(ctx):
                 f"Users should use `{PREFIX}renew` command instead.")
             logger.info(f"Removed {total_deleted} VPS items from shop (upgrades: {deleted_upgrades}, extensions: {deleted_extensions})")
         else:
-            embed = create_info_embed("â Shop Already Clean",
+            embed = create_info_embed("✅ Shop Already Clean",
                 "No VPS upgrade or extension items found in the shop.\n\n"
                 f"The shop is clean! Users can use `{PREFIX}renew` for renewals.")
 
@@ -3320,26 +3300,26 @@ async def my_vps(ctx):
     user_id = str(ctx.author.id)
     vps_list = vps_data.get(user_id, [])
 
-    # âââ No VPS Case âââââââââââââââââââââââââââââââââââââââââââ
+    # ─── No VPS Case ───────────────────────────────────────────
     if not vps_list:
         embed = create_error_embed(
-            "â No VPS Found",
-            f"You donât have any **{BOT_NAME} VPS** yet."
+            "❌ No VPS Found",
+            f"You don’t have any **{BOT_NAME} VPS** yet."
         )
         embed.add_field(
-            name="ð Quick Actions",
+            name="🚀 Quick Actions",
             value=(
-                f"â¢ `{PREFIX}manage` â Manage VPS\n"
-                f"â¢ Contact an admin to request a VPS"
+                f"• `{PREFIX}manage` – Manage VPS\n"
+                f"• Contact an admin to request a VPS"
             ),
             inline=False
         )
         await ctx.send(embed=embed)
         return
 
-    # âââ Embed ââââââââââââââââââââââââââââââââââââââââââââââââ
+    # ─── Embed ────────────────────────────────────────────────
     embed = create_info_embed(
-        title="ð¥ï¸ My VPS Dashboard",
+        title="🖥️ My VPS Dashboard",
         description="Your personal VPS overview"
     )
 
@@ -3347,7 +3327,7 @@ async def my_vps(ctx):
     running = suspended = whitelisted = 0
     vps_cards = []
 
-    # âââ VPS Processing âââââââââââââââââââââââââââââââââââââââ
+    # ─── VPS Processing ───────────────────────────────────────
     for i, vps in enumerate(vps_list, start=1):
         node = get_node(vps.get("node_id"))
         node_name = node["name"] if node else "Unknown"
@@ -3358,13 +3338,13 @@ async def my_vps(ctx):
         storage = vps.get("storage", "0GB")
 
         if vps.get("suspended"):
-            status = "â SUSPENDED"
+            status = "⛔ SUSPENDED"
             suspended += 1
         elif vps.get("status") == "running":
-            status = "ð¢ RUNNING"
+            status = "🟢 RUNNING"
             running += 1
         else:
-            status = "ð´ STOPPED"
+            status = "🔴 STOPPED"
 
         if vps.get("whitelisted"):
             whitelisted += 1
@@ -3374,26 +3354,26 @@ async def my_vps(ctx):
 
         vps_cards.append(
             f"**{i}.** `{vps['container_name']}`\n"
-            f"{status} â¢ `{config}`\n"
-            f"âï¸ `{ram}` RAM â¢ `{cpu}` CPU â¢ `{storage}` Disk\n"
-            f"ð Node: `{node_name}`\n"
-            f"â° Expires: {expiry_info['text']}"
+            f"{status} • `{config}`\n"
+            f"⚙️ `{ram}` RAM • `{cpu}` CPU • `{storage}` Disk\n"
+            f"📍 Node: `{node_name}`\n"
+            f"⏰ Expires: {expiry_info['text']}"
         )
 
-    # âââ Row 1 : Summary ââââââââââââââââââââââââââââââââââââââ
+    # ─── Row 1 : Summary ──────────────────────────────────────
     embed.add_field(
-        name="ð Summary",
+        name="📊 Summary",
         value=(
-            f"ð¥ï¸ `{total_vps}` VPS\n"
-            f"ð¢ `{running}` Running\n"
-            f"â `{suspended}` Suspended\n"
-            f"â `{whitelisted}` Whitelisted"
+            f"🖥️ `{total_vps}` VPS\n"
+            f"🟢 `{running}` Running\n"
+            f"⛔ `{suspended}` Suspended\n"
+            f"✅ `{whitelisted}` Whitelisted"
         ),
         inline=True
     )
 
     embed.add_field(
-        name="â¡ Quick Actions",
+        name="⚡ Quick Actions",
         value=(
             f"`{PREFIX}manage`\n"
             f"`{PREFIX}reinstall`\n"
@@ -3403,21 +3383,21 @@ async def my_vps(ctx):
     )
 
     embed.add_field(
-        name="ð§­ Tip",
+        name="🧭 Tip",
         value="Use **manage** to control your VPS",
         inline=True
     )
 
-    # âââ VPS Cards (Full Width) âââââââââââââââââââââââââââââââ
+    # ─── VPS Cards (Full Width) ───────────────────────────────
     vps_text = "\n\n".join(vps_cards)
     for i in range(0, len(vps_text), 1024):
         embed.add_field(
-            name="ð¥ï¸ Your VPS",
+            name="🖥️ Your VPS",
             value=vps_text[i:i + 1024],
             inline=False
         )
 
-    embed.set_footer(text=f"{BOT_NAME} â¢ VPS Control Panel")
+    embed.set_footer(text=f"{BOT_NAME} • VPS Control Panel")
     embed.timestamp = ctx.message.created_at
 
     await ctx.send(embed=embed)
@@ -3552,7 +3532,7 @@ class OSSelectView(discord.ui.View):
             add_field(success_embed, "Node", get_node(self.node_id)['name'], True)
             add_field(success_embed, "Resources", f"**RAM:** {self.ram}GB\n**CPU:** {self.cpu} Cores\n**Storage:** {self.disk}GB", False)
             add_field(success_embed, "OS", os_version, True)
-            add_field(success_embed, "â° Expiration", 
+            add_field(success_embed, "⏰ Expiration", 
                 f"**Expires:** {expires_at.strftime('%Y-%m-%d %H:%M')}\n"
                 f"**Duration:** {self.days} days\n"
                 f"**Renewal:** {renewal_cost} coins/day", True)
@@ -3561,8 +3541,8 @@ class OSSelectView(discord.ui.View):
             await interaction.followup.send(embed=success_embed)
             dm_embed = create_success_embed("VPS Created!", f"Your VPS has been successfully deployed by an admin!")
             add_field(dm_embed, "VPS Details", f"**VPS ID:** #{vps_count}\n**Container Name:** `{container_name}`\n**Configuration:** {config_str}\n**Status:** Running\n**OS:** {os_version}\n**Created:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", False)
-            add_field(dm_embed, "Management", f"â¢ Use `{PREFIX}manage` to start/stop/reinstall your VPS\nâ¢ Use `{PREFIX}manage` â SSH for terminal access\nâ¢ Contact admin for upgrades or issues", False)
-            add_field(dm_embed, "Important Notes", "â¢ Full root access via SSH\nâ¢ Docker-ready with nesting and privileged mode\nâ¢ Back up your data regularly", False)
+            add_field(dm_embed, "Management", f"• Use `{PREFIX}manage` to start/stop/reinstall your VPS\n• Use `{PREFIX}manage` → SSH for terminal access\n• Contact admin for upgrades or issues", False)
+            add_field(dm_embed, "Important Notes", "• Full root access via SSH\n• Docker-ready with nesting and privileged mode\n• Back up your data regularly", False)
             try:
                 await self.user.send(embed=dm_embed)
             except discord.Forbidden:
@@ -3602,7 +3582,7 @@ async def deploy_vps(ctx, plan_id: int = None):
     # Check if user already has a VPS
     vps_list = vps_data.get(user_id, [])
     if len(vps_list) >= 1:
-        await ctx.send(embed=create_error_embed("â VPS Limit Reached", 
+        await ctx.send(embed=create_error_embed("❌ VPS Limit Reached", 
             f"You already have **{len(vps_list)} VPS**!\n\n"
             f"**Limit:** 1 VPS per user\n"
             f"**Your VPS:** `{vps_list[0]['container_name']}`\n\n"
@@ -3612,7 +3592,7 @@ async def deploy_vps(ctx, plan_id: int = None):
     
     # If no plan specified, show plans
     if plan_id is None:
-        await ctx.send(embed=create_info_embed("ð Select a Plan", 
+        await ctx.send(embed=create_info_embed("📋 Select a Plan", 
             f"Please specify a deployment plan!\n\n"
             f"**View Plans:** `{PREFIX}deploy-plans`\n"
             f"**Deploy:** `{PREFIX}deploy <plan_id>`\n\n"
@@ -3643,47 +3623,47 @@ async def deploy_vps(ctx, plan_id: int = None):
     
     if balance < cost:
         needed = cost - balance
-        await ctx.send(embed=create_error_embed("ð° Insufficient Coins", 
+        await ctx.send(embed=create_error_embed("💰 Insufficient Coins", 
             f"You need **{cost:,} coins** to deploy a VPS.\n\n"
             f"**Your Balance:** {balance:,} coins\n"
             f"**You Need:** {needed:,} more coins\n\n"
             f"**Earn Coins:**\n"
-            f"â¢ `{PREFIX}daily` - Daily reward\n"
-            f"â¢ `{PREFIX}work` - Work for coins\n"
-            f"â¢ `{PREFIX}coinhelp` - More ways to earn"))
+            f"• `{PREFIX}daily` - Daily reward\n"
+            f"• `{PREFIX}work` - Work for coins\n"
+            f"• `{PREFIX}coinhelp` - More ways to earn"))
         return
     
     # Show deployment confirmation
-    embed = create_info_embed("ð Deploy Your VPS", 
+    embed = create_info_embed("🚀 Deploy Your VPS", 
         f"You're about to deploy your own VPS!\n\n"
         f"**Plan:** {plan['icon']} {plan['name']}\n"
         f"**Specifications:**\n"
-        f"â¢ **RAM:** {ram}GB\n"
-        f"â¢ **CPU:** {cpu} Core{'s' if cpu > 1 else ''}\n"
-        f"â¢ **Disk:** {disk}GB\n"
-        f"â¢ **Duration:** {default_days} day{'s' if default_days > 1 else ''}\n\n"
+        f"• **RAM:** {ram}GB\n"
+        f"• **CPU:** {cpu} Core{'s' if cpu > 1 else ''}\n"
+        f"• **Disk:** {disk}GB\n"
+        f"• **Duration:** {default_days} day{'s' if default_days > 1 else ''}\n\n"
         f"**Cost:** {cost:,} coins\n"
         f"**Your Balance:** {balance:,} coins\n"
         f"**After Purchase:** {balance - cost:,} coins\n\n"
         f"**Features:**\n"
-        f"â¢ Full root access\n"
-        f"â¢ Docker ready\n"
-        f"â¢ SSH access\n"
-        f"â¢ Port forwarding\n\n"
-        f"React with â to confirm or â to cancel")
+        f"• Full root access\n"
+        f"• Docker ready\n"
+        f"• SSH access\n"
+        f"• Port forwarding\n\n"
+        f"React with ✅ to confirm or ❌ to cancel")
     
     msg = await ctx.send(embed=embed)
-    await msg.add_reaction("â")
-    await msg.add_reaction("â")
+    await msg.add_reaction("✅")
+    await msg.add_reaction("❌")
     
     def check(reaction, user):
-        return user == ctx.author and str(reaction.emoji) in ["â", "â"] and reaction.message.id == msg.id
+        return user == ctx.author and str(reaction.emoji) in ["✅", "❌"] and reaction.message.id == msg.id
     
     try:
         reaction, user = await bot.wait_for('reaction_add', timeout=60.0, check=check)
         
-        if str(reaction.emoji) == "â":
-            await msg.edit(embed=create_info_embed("â Cancelled", "VPS deployment cancelled."))
+        if str(reaction.emoji) == "❌":
+            await msg.edit(embed=create_info_embed("❌ Cancelled", "VPS deployment cancelled."))
             return
         
         # Process payment
@@ -3695,12 +3675,12 @@ async def deploy_vps(ctx, plan_id: int = None):
         success, new_balance = await run_in_executor(process_payment)
         
         if not success:
-            await msg.edit(embed=create_error_embed("â Payment Failed", 
+            await msg.edit(embed=create_error_embed("❌ Payment Failed", 
                 "Failed to process payment. Please try again."))
             return
         
         # Update message to show deployment in progress
-        await msg.edit(embed=create_info_embed("â³ Deploying VPS", 
+        await msg.edit(embed=create_info_embed("⏳ Deploying VPS", 
             "Your VPS is being deployed... This may take a moment."))
         
         # Select node with available capacity
@@ -3715,7 +3695,7 @@ async def deploy_vps(ctx, plan_id: int = None):
         if not selected_node:
             # Refund coins
             add_coins(user_id, cost, 'refund', 'VPS deployment failed - no available nodes')
-            await msg.edit(embed=create_error_embed("â Deployment Failed", 
+            await msg.edit(embed=create_error_embed("❌ Deployment Failed", 
                 "No available nodes. Your coins have been refunded.\n"
                 "Please contact an admin."))
             return
@@ -3780,33 +3760,33 @@ async def deploy_vps(ctx, plan_id: int = None):
             expiry_info = format_expiry_time(expires_at.isoformat())
             renewal_cost = int(get_setting('coins_vps_renewal_1day', 50))
             
-            success_embed = create_success_embed("â VPS Deployed Successfully!", 
-                f"Your VPS is now running! ð\n\n"
+            success_embed = create_success_embed("✅ VPS Deployed Successfully!", 
+                f"Your VPS is now running! 🎉\n\n"
                 f"**Container:** `{container_name}`\n"
                 f"**Node:** {selected_node['name']}\n"
                 f"**OS:** Ubuntu 22.04 LTS\n\n"
                 f"**Resources:**\n"
-                f"â¢ RAM: {ram}GB\n"
-                f"â¢ CPU: {cpu} Core\n"
-                f"â¢ Disk: {disk}GB\n\n"
+                f"• RAM: {ram}GB\n"
+                f"• CPU: {cpu} Core\n"
+                f"• Disk: {disk}GB\n\n"
                 f"**Expiration:**\n"
-                f"â¢ Expires: {expiry_info['text']}\n"
-                f"â¢ Date: {expires_at.strftime('%Y-%m-%d %H:%M')}\n"
-                f"â¢ Renewal: {renewal_cost} coins/day\n\n"
+                f"• Expires: {expiry_info['text']}\n"
+                f"• Date: {expires_at.strftime('%Y-%m-%d %H:%M')}\n"
+                f"• Renewal: {renewal_cost} coins/day\n\n"
                 f"**Payment:**\n"
-                f"â¢ Cost: {cost:,} coins\n"
-                f"â¢ New Balance: {new_balance:,} coins")
+                f"• Cost: {cost:,} coins\n"
+                f"• New Balance: {new_balance:,} coins")
             
-            add_field(success_embed, "ð® Quick Start", 
+            add_field(success_embed, "🎮 Quick Start", 
                 f"`{PREFIX}manage` - Control your VPS\n"
-                f"`{PREFIX}manage` â SSH - Get terminal access\n"
+                f"`{PREFIX}manage` → SSH - Get terminal access\n"
                 f"`{PREFIX}renew 1 <days>` - Extend expiry", False)
             
-            add_field(success_embed, "ð¡ Important", 
-                "â¢ Full root access via SSH\n"
-                "â¢ Docker-ready with nesting enabled\n"
-                "â¢ Back up your data regularly\n"
-                "â¢ Run `sudo resize2fs /` if needed", False)
+            add_field(success_embed, "💡 Important", 
+                "• Full root access via SSH\n"
+                "• Docker-ready with nesting enabled\n"
+                "• Back up your data regularly\n"
+                "• Run `sudo resize2fs /` if needed", False)
             
             await msg.edit(embed=success_embed)
             
@@ -3815,14 +3795,14 @@ async def deploy_vps(ctx, plan_id: int = None):
         except Exception as e:
             # Refund coins on failure
             add_coins(user_id, cost, 'refund', f'VPS deployment failed: {str(e)}')
-            await msg.edit(embed=create_error_embed("â Deployment Failed", 
+            await msg.edit(embed=create_error_embed("❌ Deployment Failed", 
                 f"Failed to deploy VPS: {str(e)}\n\n"
                 f"Your {cost:,} coins have been refunded.\n"
                 f"Please contact an admin for assistance."))
             logger.error(f"VPS deployment failed for {ctx.author.name}: {e}")
             
     except asyncio.TimeoutError:
-        await msg.edit(embed=create_info_embed("â±ï¸ Timeout", "Deployment request timed out."))
+        await msg.edit(embed=create_info_embed("⏱️ Timeout", "Deployment request timed out."))
 
 @bot.command(name='deploy-plans', aliases=['plans', 'vps-plans'])
 async def show_deploy_plans(ctx):
@@ -3834,26 +3814,26 @@ async def show_deploy_plans(ctx):
             "No deployment plans are currently available. Contact an admin."))
         return
     
-    embed = create_info_embed("ð VPS Deployment Plans", 
+    embed = create_info_embed("🚀 VPS Deployment Plans", 
         "Choose a plan and deploy your VPS!")
     
     for plan in plans:
         plan_info = (
             f"**Resources:**\n"
-            f"â¢ RAM: {plan['ram_gb']}GB\n"
-            f"â¢ CPU: {plan['cpu_cores']} Core{'s' if plan['cpu_cores'] > 1 else ''}\n"
-            f"â¢ Disk: {plan['disk_gb']}GB\n"
-            f"â¢ Duration: {plan['duration_days']} day{'s' if plan['duration_days'] > 1 else ''}\n\n"
+            f"• RAM: {plan['ram_gb']}GB\n"
+            f"• CPU: {plan['cpu_cores']} Core{'s' if plan['cpu_cores'] > 1 else ''}\n"
+            f"• Disk: {plan['disk_gb']}GB\n"
+            f"• Duration: {plan['duration_days']} day{'s' if plan['duration_days'] > 1 else ''}\n\n"
             f"**Cost:** {plan['cost_coins']:,} coins\n"
             f"**Deploy:** `{PREFIX}deploy {plan['id']}`"
         )
         add_field(embed, f"{plan['icon']} {plan['name']}", plan_info, True)
     
-    add_field(embed, "ð¡ How to Deploy", 
+    add_field(embed, "💡 How to Deploy", 
         f"`{PREFIX}deploy <plan_id>`\n"
         f"Example: `{PREFIX}deploy 2` (Basic plan)", False)
     
-    embed.set_footer(text=f"{BOT_NAME} â¢ Limit: 1 VPS per user")
+    embed.set_footer(text=f"{BOT_NAME} • Limit: 1 VPS per user")
     await ctx.send(embed=embed)
 
 @bot.command(name='resource-plans', aliases=['resources', 'upgrade-plans'])
@@ -3866,29 +3846,29 @@ async def show_resource_plans(ctx):
             "No resource plans are currently available. Contact an admin."))
         return
     
-    embed = create_info_embed("â¡ Resource Upgrade Plans", 
+    embed = create_info_embed("⚡ Resource Upgrade Plans", 
         "Upgrade your VPS to more powerful resources!")
     
     for plan in plans:
         plan_info = (
             f"**New Resources:**\n"
-            f"â¢ RAM: {plan['ram_gb']}GB\n"
-            f"â¢ CPU: {plan['cpu_cores']} Core{'s' if plan['cpu_cores'] > 1 else ''}\n"
-            f"â¢ Disk: {plan['disk_gb']}GB\n\n"
+            f"• RAM: {plan['ram_gb']}GB\n"
+            f"• CPU: {plan['cpu_cores']} Core{'s' if plan['cpu_cores'] > 1 else ''}\n"
+            f"• Disk: {plan['disk_gb']}GB\n\n"
             f"**Upgrade Cost:** {plan['upgrade_cost']:,} coins\n"
             f"**Upgrade:** `{PREFIX}upgrade <vps_id> {plan['id']}`"
         )
         add_field(embed, f"{plan['icon']} {plan['name']}", plan_info, True)
     
-    add_field(embed, "ð¡ How to Upgrade", 
+    add_field(embed, "💡 How to Upgrade", 
         f"`{PREFIX}upgrade <vps_number> <plan_id>`\n"
         f"Example: `{PREFIX}upgrade 1 3` (Upgrade VPS #1 to Medium)", False)
     
-    add_field(embed, "ð Note", 
+    add_field(embed, "📝 Note", 
         "Upgrades are permanent and cannot be downgraded.\n"
         "Your VPS will be restarted during the upgrade.", False)
     
-    embed.set_footer(text=f"{BOT_NAME} â¢ Instant resource upgrades")
+    embed.set_footer(text=f"{BOT_NAME} • Instant resource upgrades")
     await ctx.send(embed=embed)
 
 @bot.command(name='upgrade', aliases=['upgrade-vps', 'vps-upgrade'])
@@ -3949,7 +3929,7 @@ async def upgrade_vps(ctx, vps_number: int = None, plan_id: int = None):
     
     if balance < cost:
         needed = cost - balance
-        await ctx.send(embed=create_error_embed("ð° Insufficient Coins", 
+        await ctx.send(embed=create_error_embed("💰 Insufficient Coins", 
             f"You need **{cost:,} coins** to upgrade to **{plan['name']}**.\n\n"
             f"**Your Balance:** {balance:,} coins\n"
             f"**You Need:** {needed:,} more coins\n\n"
@@ -3957,32 +3937,32 @@ async def upgrade_vps(ctx, vps_number: int = None, plan_id: int = None):
         return
     
     # Show upgrade confirmation
-    embed = create_warning_embed("â¡ Confirm VPS Upgrade", 
+    embed = create_warning_embed("⚡ Confirm VPS Upgrade", 
         f"You're about to upgrade your VPS!\n\n"
         f"**VPS:** `{vps['container_name']}`\n"
         f"**Plan:** {plan['icon']} {plan['name']}\n\n"
         f"**Current Resources:**\n"
-        f"â¢ RAM: {current_ram}GB â **{plan['ram_gb']}GB**\n"
-        f"â¢ CPU: {current_cpu} â **{plan['cpu_cores']}** Core{'s' if plan['cpu_cores'] > 1 else ''}\n"
-        f"â¢ Disk: {current_disk}GB â **{plan['disk_gb']}GB**\n\n"
+        f"• RAM: {current_ram}GB → **{plan['ram_gb']}GB**\n"
+        f"• CPU: {current_cpu} → **{plan['cpu_cores']}** Core{'s' if plan['cpu_cores'] > 1 else ''}\n"
+        f"• Disk: {current_disk}GB → **{plan['disk_gb']}GB**\n\n"
         f"**Cost:** {cost:,} coins\n"
         f"**Your Balance:** {balance:,} coins\n"
         f"**After Upgrade:** {balance - cost:,} coins\n\n"
-        f"â ï¸ **Warning:** VPS will be restarted during upgrade.\n"
-        f"React with â to confirm or â to cancel")
+        f"⚠️ **Warning:** VPS will be restarted during upgrade.\n"
+        f"React with ✅ to confirm or ❌ to cancel")
     
     msg = await ctx.send(embed=embed)
-    await msg.add_reaction("â")
-    await msg.add_reaction("â")
+    await msg.add_reaction("✅")
+    await msg.add_reaction("❌")
     
     def check(reaction, user):
-        return user == ctx.author and str(reaction.emoji) in ["â", "â"] and reaction.message.id == msg.id
+        return user == ctx.author and str(reaction.emoji) in ["✅", "❌"] and reaction.message.id == msg.id
     
     try:
         reaction, user = await bot.wait_for('reaction_add', timeout=60.0, check=check)
         
-        if str(reaction.emoji) == "â":
-            await msg.edit(embed=create_info_embed("â Cancelled", "VPS upgrade cancelled."))
+        if str(reaction.emoji) == "❌":
+            await msg.edit(embed=create_info_embed("❌ Cancelled", "VPS upgrade cancelled."))
             return
         
         # Process payment
@@ -3994,12 +3974,12 @@ async def upgrade_vps(ctx, vps_number: int = None, plan_id: int = None):
         success, new_balance = await run_in_executor(process_payment)
         
         if not success:
-            await msg.edit(embed=create_error_embed("â Payment Failed", 
+            await msg.edit(embed=create_error_embed("❌ Payment Failed", 
                 "Failed to process payment. Please try again."))
             return
         
         # Update message to show upgrade in progress
-        await msg.edit(embed=create_info_embed("â³ Upgrading VPS", 
+        await msg.edit(embed=create_info_embed("⏳ Upgrading VPS", 
             "Your VPS is being upgraded... This may take a moment."))
         
         container_name = vps['container_name']
@@ -4041,22 +4021,22 @@ async def upgrade_vps(ctx, vps_number: int = None, plan_id: int = None):
             log_vps_upgrade(vps.get('id', 0), user_id, old_specs, new_specs, cost, user_id)
             
             # Success message
-            success_embed = create_success_embed("â VPS Upgraded Successfully!", 
-                f"Your VPS has been upgraded! ð\n\n"
+            success_embed = create_success_embed("✅ VPS Upgraded Successfully!", 
+                f"Your VPS has been upgraded! 🎉\n\n"
                 f"**VPS:** `{container_name}`\n"
                 f"**Plan:** {plan['icon']} {plan['name']}\n\n"
                 f"**New Resources:**\n"
-                f"â¢ RAM: {plan['ram_gb']}GB\n"
-                f"â¢ CPU: {plan['cpu_cores']} Core{'s' if plan['cpu_cores'] > 1 else ''}\n"
-                f"â¢ Disk: {plan['disk_gb']}GB\n\n"
+                f"• RAM: {plan['ram_gb']}GB\n"
+                f"• CPU: {plan['cpu_cores']} Core{'s' if plan['cpu_cores'] > 1 else ''}\n"
+                f"• Disk: {plan['disk_gb']}GB\n\n"
                 f"**Cost:** {cost:,} coins\n"
                 f"**New Balance:** {new_balance:,} coins\n\n"
                 f"Your VPS is now running with upgraded resources!")
             
-            add_field(success_embed, "ð¡ Next Steps", 
-                f"â¢ Run `sudo resize2fs /` inside VPS to expand filesystem\n"
-                f"â¢ Use `{PREFIX}manage` to control your VPS\n"
-                f"â¢ Check stats with `{PREFIX}status {container_name}`", False)
+            add_field(success_embed, "💡 Next Steps", 
+                f"• Run `sudo resize2fs /` inside VPS to expand filesystem\n"
+                f"• Use `{PREFIX}manage` to control your VPS\n"
+                f"• Check stats with `{PREFIX}status {container_name}`", False)
             
             await msg.edit(embed=success_embed)
             
@@ -4065,14 +4045,14 @@ async def upgrade_vps(ctx, vps_number: int = None, plan_id: int = None):
         except Exception as e:
             # Refund coins on failure
             add_coins(user_id, cost, 'refund', f'VPS upgrade failed: {str(e)}')
-            await msg.edit(embed=create_error_embed("â Upgrade Failed", 
+            await msg.edit(embed=create_error_embed("❌ Upgrade Failed", 
                 f"Failed to upgrade VPS: {str(e)}\n\n"
                 f"Your {cost:,} coins have been refunded.\n"
                 f"Please contact an admin for assistance."))
             logger.error(f"VPS upgrade failed for {ctx.author.name}: {e}")
             
     except asyncio.TimeoutError:
-        await msg.edit(embed=create_info_embed("â±ï¸ Timeout", "Upgrade request timed out."))
+        await msg.edit(embed=create_info_embed("⏱️ Timeout", "Upgrade request timed out."))
 
 class ReinstallOSSelectView(discord.ui.View):
     def __init__(self, parent_view, container_name, owner_id, actual_idx, ram_gb, cpu, storage_gb, node_id):
@@ -4199,35 +4179,35 @@ class ManageView(discord.ui.View):
         resource_info += f"**Storage:** {vps['storage']}\n"
         resource_info += f"**OS:** {vps.get('os_version', 'ubuntu:22.04')}\n"
         resource_info += f"**Uptime:** {stats['uptime']}"
-        add_field(embed, "ð Allocated Resources", resource_info, False)
+        add_field(embed, "📊 Allocated Resources", resource_info, False)
         
         # Add expiry information
         expiry_info = format_expiry_time(vps.get('expires_at'))
-        add_field(embed, "â° Expiration", expiry_info['text'], True)
+        add_field(embed, "⏰ Expiration", expiry_info['text'], True)
         if expiry_info['status'] in ['warning', 'critical', 'urgent']:
-            add_field(embed, "ð¡ Renew", f"`{PREFIX}renew {vps.get('id', '?')} <days>`", True)
+            add_field(embed, "💡 Renew", f"`{PREFIX}renew {vps.get('id', '?')} <days>`", True)
         
         if suspended:
-            add_field(embed, "â ï¸ Suspended", "This VPS is suspended. Contact an admin to unsuspend.", False)
+            add_field(embed, "⚠️ Suspended", "This VPS is suspended. Contact an admin to unsuspend.", False)
         if whitelisted:
-            add_field(embed, "â Whitelisted", "This VPS is exempt from auto-suspension.", False)
+            add_field(embed, "✅ Whitelisted", "This VPS is exempt from auto-suspension.", False)
         live_stats = f"**CPU Usage:** {stats['cpu']:.1f}%\n**Memory:** {stats['ram']['used']}/{stats['ram']['total']} MB ({stats['ram']['pct']:.1f}%)\n**Disk:** {stats['disk']}"
-        add_field(embed, "ð Live Usage", live_stats, False)
-        add_field(embed, "ð® Controls", "Use the buttons below to manage your VPS", False)
+        add_field(embed, "📈 Live Usage", live_stats, False)
+        add_field(embed, "🎮 Controls", "Use the buttons below to manage your VPS", False)
         return embed
 
     def add_action_buttons(self):
         if not self.is_shared and not self.is_admin:
-            reinstall_button = discord.ui.Button(label="ð Reinstall", style=discord.ButtonStyle.danger)
+            reinstall_button = discord.ui.Button(label="🔄 Reinstall", style=discord.ButtonStyle.danger)
             reinstall_button.callback = lambda inter: self.action_callback(inter, 'reinstall')
             self.add_item(reinstall_button)
-        start_button = discord.ui.Button(label="â¶ Start", style=discord.ButtonStyle.success)
+        start_button = discord.ui.Button(label="▶ Start", style=discord.ButtonStyle.success)
         start_button.callback = lambda inter: self.action_callback(inter, 'start')
-        stop_button = discord.ui.Button(label="â¸ Stop", style=discord.ButtonStyle.secondary)
+        stop_button = discord.ui.Button(label="⏸ Stop", style=discord.ButtonStyle.secondary)
         stop_button.callback = lambda inter: self.action_callback(inter, 'stop')
-        ssh_button = discord.ui.Button(label="ð SSH", style=discord.ButtonStyle.primary)
+        ssh_button = discord.ui.Button(label="🔑 SSH", style=discord.ButtonStyle.primary)
         ssh_button.callback = lambda inter: self.action_callback(inter, 'tmate')
-        stats_button = discord.ui.Button(label="ð Stats", style=discord.ButtonStyle.secondary)
+        stats_button = discord.ui.Button(label="📊 Stats", style=discord.ButtonStyle.secondary)
         stats_button.callback = lambda inter: self.action_callback(inter, 'stats')
         self.add_item(start_button)
         self.add_item(stop_button)
@@ -4262,7 +4242,7 @@ class ManageView(discord.ui.View):
         node_id = target_vps['node_id']
         if action == 'stats':
             stats = await get_container_stats(container_name, node_id)
-            stats_embed = create_info_embed("ð Live Statistics", f"Real-time stats for `{container_name}`")
+            stats_embed = create_info_embed("📈 Live Statistics", f"Real-time stats for `{container_name}`")
             add_field(stats_embed, "Status", f"`{stats['status'].upper()}`", True)
             add_field(stats_embed, "CPU", f"{stats['cpu']:.1f}%", True)
             add_field(stats_embed, "Memory", f"{stats['ram']['used']}/{stats['ram']['total']} MB ({stats['ram']['pct']:.1f}%)", True)
@@ -4281,7 +4261,7 @@ class ManageView(discord.ui.View):
             cpu = int(target_vps['cpu'])
             storage_gb = int(target_vps['storage'].replace('GB', ''))
             confirm_embed = create_warning_embed("Reinstall Warning",
-                f"â ï¸ **WARNING:** This will erase all data on VPS `{container_name}` and reinstall a fresh OS.\n\n"
+                f"⚠️ **WARNING:** This will erase all data on VPS `{container_name}` and reinstall a fresh OS.\n\n"
                 f"This action cannot be undone. Continue?")
             class ConfirmView(discord.ui.View):
                 def __init__(self, parent_view, container_name, owner_id, actual_idx, ram_gb, cpu, storage_gb, node_id):
@@ -4357,10 +4337,10 @@ class ManageView(discord.ui.View):
                 ssh_url = ssh_output.strip()
                 if ssh_url:
                     try:
-                        ssh_embed = create_embed("ð SSH Access", f"SSH connection for VPS `{container_name}`:", 0x00ff88)
+                        ssh_embed = create_embed("🔑 SSH Access", f"SSH connection for VPS `{container_name}`:", 0x00ff88)
                         add_field(ssh_embed, "Command", f"```{ssh_url}```", False)
-                        add_field(ssh_embed, "â ï¸ Security", "This link is temporary. Do not share it.", False)
-                        add_field(ssh_embed, "ð Session", f"Session ID: {session_name}", False)
+                        add_field(ssh_embed, "⚠️ Security", "This link is temporary. Do not share it.", False)
+                        add_field(ssh_embed, "📝 Session", f"Session ID: {session_name}", False)
                         await interaction.user.send(embed=ssh_embed)
                         await interaction.followup.send(embed=create_success_embed("SSH Sent", f"Check your DMs for SSH link! Session: {session_name}"), ephemeral=True)
                     except discord.Forbidden:
@@ -4390,7 +4370,7 @@ async def manage_vps(ctx, user: discord.Member = None):
         vps_list = vps_data.get(user_id, [])
         if not vps_list:
             embed = create_error_embed("No VPS Found", f"You don't have any {BOT_NAME} VPS. Contact an admin to create one.")
-            add_field(embed, "Quick Actions", f"â¢ `{PREFIX}manage` - Manage VPS\nâ¢ Contact admin for VPS creation", False)
+            add_field(embed, "Quick Actions", f"• `{PREFIX}manage` - Manage VPS\n• Contact admin for VPS creation", False)
             await ctx.send(embed=embed)
             return
         view = ManageView(user_id, vps_list)
@@ -4400,18 +4380,18 @@ async def manage_vps(ctx, user: discord.Member = None):
 async def get_node_status(node_id: int) -> str:
     node = get_node(node_id)
     if not node:
-        return "â Unknown"
+        return "❓ Unknown"
     if node['is_local']:
-        return "ð¢ Online (Local)"
+        return "🟢 Online (Local)"
     try:
         response = requests.get(f"{node['url']}/api/ping", params={'api_key': node['api_key']}, timeout=5)
         if response.status_code == 200:
-            return "ð¢ Online"
+            return "🟢 Online"
         else:
-            return "ð´ Offline"
+            return "🔴 Offline"
     except Exception as e:
         logger.error(f"Failed to ping node {node['name']}: {e}")
-        return "ð´ Offline"
+        return "🔴 Offline"
 
 
 def get_host_disk_usage():
@@ -4484,7 +4464,7 @@ async def vps_list(ctx, node_id: int = 1):
 
     # Get node status
     status = await get_node_status(node_id)
-    is_online = status.startswith("ð¢")
+    is_online = status.startswith("🟢")
 
     # Get node resource stats (will use defaults if offline)
     stats = await get_host_stats(node_id)
@@ -4495,12 +4475,12 @@ async def vps_list(ctx, node_id: int = 1):
     # Resources field text (modern: compact inline stats with progress-like emojis)
     if is_online:
         resources_text = (
-            f"**CPU** {cpu_usage:.0f}% {'â' * int(cpu_usage / 5) + 'â' * (20 - int(cpu_usage / 5))} "
-            f"\n**RAM** {ram_usage:.0f}% {'â' * int(ram_usage / 5) + 'â' * (20 - int(ram_usage / 5))} "
+            f"**CPU** {cpu_usage:.0f}% {'█' * int(cpu_usage / 5) + '░' * (20 - int(cpu_usage / 5))} "
+            f"\n**RAM** {ram_usage:.0f}% {'█' * int(ram_usage / 5) + '░' * (20 - int(ram_usage / 5))} "
             f"\n**Disk** {disk_usage}"
         )
     else:
-        resources_text = "â ï¸ Resources unavailable (Offline)"
+        resources_text = "⚠️ Resources unavailable (Offline)"
 
     # Get VPS capacity
     current_vps = get_current_vps_count(node_id)
@@ -4545,62 +4525,62 @@ async def vps_list(ctx, node_id: int = 1):
             other += 1
 
         # Modern emoji: vibrant and status-specific
-        status_emoji = "ð¢" if status == 'running' and not suspended_flag else "ð¡" if suspended_flag else "ð´"
+        status_emoji = "🟢" if status == 'running' and not suspended_flag else "🟡" if suspended_flag else "🔴"
         vps_status = status.upper()
         if suspended_flag:
             vps_status += " (SUSPENDED)"
         if vps.get('whitelisted', False):
             vps_status += " (WHITELISTED)"
         config = vps.get('config', 'Custom')
-        vps_info.append(f"{status_emoji} **{i}.** {username} â¢ `{vps['container_name']}`\n _{vps_status} | {config}_")
+        vps_info.append(f"{status_emoji} **{i}.** {username} • `{vps['container_name']}`\n _{vps_status} | {config}_")
 
     # Create main embed (modern: gradient-inspired colors, clean typography)
     color = 0x10b981 if is_online else 0xef4444  # Teal green / Soft red for modern feel
     embed = create_embed(
-        title=f"ð¥ï¸ VPS Dashboard - {node['name']}",
+        title=f"🖥️ VPS Dashboard - {node['name']}",
         description=f"**ID:** `{node_id}` | **Region:** {node['location']}\n*Updated: <t:{int(datetime.now().timestamp())}:R>*",
         color=color
     )
     embed.set_thumbnail(url=node.get('thumbnail_url', None))
 
     # Inline status and capacity for compact top row
-    add_field(embed, "ð¡ **Status**", status, True)
-    add_field(embed, "ðï¸ **Capacity**", capacity_text, True)
+    add_field(embed, "📡 **Status**", status, True)
+    add_field(embed, "🗄️ **Capacity**", capacity_text, True)
 
     # Resources field with modern bar visualization
-    add_field(embed, "ð **Resources**", resources_text, False)
+    add_field(embed, "📊 **Resources**", resources_text, False)
 
     # Summary field (modern: compact bullet-like with inline emojis)
     summary_text = (
-        f"**Total:** {total_vps} ð\n"
-        f"**Running:** {running} ð¢\n"
-        f"**Stopped:** {stopped} â¸ï¸\n"
-        f"**Suspended:** {suspended} ð¡"
+        f"**Total:** {total_vps} 📊\n"
+        f"**Running:** {running} 🟢\n"
+        f"**Stopped:** {stopped} ⏸️\n"
+        f"**Suspended:** {suspended} 🟡"
     )
     if other > 0:
-        summary_text += f"\n**Other:** {other} â ï¸"
-    add_field(embed, "ð **Summary**", summary_text, True)
+        summary_text += f"\n**Other:** {other} ⚠️"
+    add_field(embed, "📈 **Summary**", summary_text, True)
 
     # VPS List - chunked embeds with modern pagination
     if vps_info:
         chunk_size = 6  # Smaller chunks for cleaner mobile-friendly embeds
         chunks = [vps_info[i:i + chunk_size] for i in range(0, len(vps_info), chunk_size)]
         first_chunk_text = "\n".join(chunks[0])
-        add_field(embed, "ð **Active VPS (1/{len(chunks)})**", f"```{first_chunk_text}```", False)
+        add_field(embed, "📋 **Active VPS (1/{len(chunks)})**", f"```{first_chunk_text}```", False)
 
         # Paginated follow-ups with consistent styling
         for idx, chunk in enumerate(chunks[1:], 2):
             page_embed = create_embed(
-                title=f"ð¥ï¸ VPS Dashboard - {node['name']} (Page {idx}/{len(chunks)})",
+                title=f"🖥️ VPS Dashboard - {node['name']} (Page {idx}/{len(chunks)})",
                 description=f"**ID:** `{node_id}` | **Region:** {node['location']}\n*Updated: <t:{int(datetime.now().timestamp())}:R>*",
                 color=color
             )
             chunk_text = "\n".join(chunk)
-            add_field(page_embed, "ð **VPS List**", f"```{chunk_text}```", False)
+            add_field(page_embed, "📋 **VPS List**", f"```{chunk_text}```", False)
             page_embed.set_footer(text=f"Total: {total_vps} VPS | Powered by Your Bot")
             await ctx.send(embed=page_embed)
     else:
-        add_field(embed, "ð **VPS List**", "No deployments yet. Launch one! ð", False)
+        add_field(embed, "📋 **VPS List**", "No deployments yet. Launch one! 🚀", False)
 
     embed.set_footer(text=f"Refresh with !vps-list {node_id} | {len(vps_info)} shown")
     await ctx.send(embed=embed)
@@ -4633,7 +4613,7 @@ async def list_all_vps(ctx):
             for i, vps in enumerate(vps_list):
                 node = get_node(vps['node_id'])
                 node_name = node['name'] if node else "Unknown"
-                status_emoji = "ð¢" if vps.get('status') == 'running' and not vps.get('suspended', False) else "ð¡" if vps.get('suspended', False) else "ð´"
+                status_emoji = "🟢" if vps.get('status') == 'running' and not vps.get('suspended', False) else "🟡" if vps.get('suspended', False) else "🔴"
                 status_text = vps.get('status', 'unknown').upper()
                 if vps.get('suspended', False):
                     status_text += " (SUSPENDED)"
@@ -4641,7 +4621,7 @@ async def list_all_vps(ctx):
                     status_text += " (WHITELISTED)"
                 vps_info.append(f"{status_emoji} **{user.name}** - VPS {i+1}: `{vps['container_name']}` - {vps.get('config', 'Custom')} - {status_text} (Node: {node_name})")
         except discord.NotFound:
-            vps_info.append(f"â Unknown User ({user_id}) - {len(vps_list)} VPS")
+            vps_info.append(f"❓ Unknown User ({user_id}) - {len(vps_list)} VPS")
     embed = create_embed("All VPS Information", "Complete overview of all VPS deployments and user statistics", 0x1a1a1a)
     add_field(embed, "System Overview", f"**Total Users:** {total_users}\n**Total VPS:** {total_vps}\n**Running:** {running_vps}\n**Stopped:** {stopped_vps}\n**Suspended:** {suspended_vps}\n**Whitelisted:** {whitelisted_vps}", False)
     await ctx.send(embed=embed)
@@ -4806,7 +4786,7 @@ async def ports_command(ctx, subcmd: str = None, *args):
         host_port = await create_port_forward(user_id, container, vps_port, node_id)
         if host_port:
             embed = create_success_embed("Port Forward Created", f"VPS #{vps_num} port {vps_port} (TCP/UDP) forwarded to host port {host_port}.")
-            add_field(embed, "Access", f"External: {YOUR_SERVER_IP}:{host_port} â VPS:{vps_port} (TCP & UDP)", False)
+            add_field(embed, "Access", f"External: {YOUR_SERVER_IP}:{host_port} → VPS:{vps_port} (TCP & UDP)", False)
             add_field(embed, "Quota Update", f"Used: {used + 1}/{allocated}", False)
             await ctx.send(embed=embed)
         else:
@@ -4822,7 +4802,7 @@ async def ports_command(ctx, subcmd: str = None, *args):
                 vps_num = next((i+1 for i, v in enumerate(vps_data.get(user_id, [])) if v['container_name'] == f['vps_container']), 'Unknown')
                 created = datetime.fromisoformat(f['created_at']).strftime('%Y-%m-%d %H:%M')
                 created = datetime.fromisoformat(f['created_at']).strftime('%Y-%m-%d %H:%M')
-                text.append(f"**ID {f['id']}** - VPS #{vps_num}: {f['vps_port']} (TCP/UDP) â {f['host_port']} (Created: {created})")
+                text.append(f"**ID {f['id']}** - VPS #{vps_num}: {f['vps_port']} (TCP/UDP) → {f['host_port']} (Created: {created})")
             add_field(embed, "Active Forwards", "\n".join(text[:10]), False)
             if len(forwards) > 10:
                 add_field(embed, "Note", f"Showing 10 of {len(forwards)}. Remove unused with {PREFIX}ports remove <id>.")
@@ -4869,7 +4849,7 @@ async def delete_vps(ctx, user: discord.Member, vps_number: int, *, reason: str 
 
     node_result = "Not checked"
 
-    # 1ï¸â£ Try deleting container
+    # 1️⃣ Try deleting container
     try:
         await execute_lxc(container_name, f"delete {container_name} --force", node_id=node_id)
         node_result = "Container deleted successfully."
@@ -4880,7 +4860,7 @@ async def delete_vps(ctx, user: discord.Member, vps_number: int, *, reason: str 
         else:
             node_result = f"Container delete failed: {e}"
 
-    # 2ï¸â£ DELETE FROM DATABASE (THIS IS THE FIX)
+    # 2️⃣ DELETE FROM DATABASE (THIS IS THE FIX)
     conn = get_db()
     cur = conn.cursor()
 
@@ -4890,7 +4870,7 @@ async def delete_vps(ctx, user: discord.Member, vps_number: int, *, reason: str 
     conn.commit()
     conn.close()
 
-    # 3ï¸â£ Remove from memory
+    # 3️⃣ Remove from memory
     del vps_data[user_id][vps_number - 1]
     if not vps_data[user_id]:
         del vps_data[user_id]
@@ -4906,8 +4886,8 @@ async def delete_vps(ctx, user: discord.Member, vps_number: int, *, reason: str 
 
     save_vps_data()
 
-    # 4ï¸â£ Success embed
-    embed = create_success_embed("ð UnixNodes - VPS Deleted Successfully")
+    # 4️⃣ Success embed
+    embed = create_success_embed("🌟 UnixNodes - VPS Deleted Successfully")
     add_field(embed, "Owner", user.mention, True)
     add_field(embed, "VPS Number", f"#{vps_number}", True)
     add_field(embed, "Container", container_name, False)
@@ -5099,14 +5079,14 @@ async def system_status(ctx):
         # Determine node type
         if node['is_local']:
             local_nodes += 1
-            node_type = "ð¥ï¸ Local"
+            node_type = "🖥️ Local"
         else:
             remote_nodes += 1
-            node_type = "ð Remote"
+            node_type = "🌐 Remote"
         
         # Check node status
         if node['is_local']:
-            status = "ð¢ Online"
+            status = "🟢 Online"
             running_nodes += 1
             
             # Get local resources (approximate)
@@ -5161,7 +5141,7 @@ async def system_status(ctx):
                 
             except Exception as e:
                 logger.error(f"Error getting local node resources: {e}")
-                status = "â ï¸ Unknown"
+                status = "⚠️ Unknown"
                 total_node_ram_free = 0
                 total_node_cpu_free = 0
                 total_node_disk_free = 0
@@ -5170,13 +5150,13 @@ async def system_status(ctx):
             try:
                 response = requests.get(f"{node['url']}/api/ping", params={'api_key': node['api_key']}, timeout=5)
                 if response.status_code == 200:
-                    status = "ð¢ Online"
+                    status = "🟢 Online"
                     running_nodes += 1
                 else:
-                    status = "ð´ Offline"
+                    status = "🔴 Offline"
                     stopped_nodes += 1
             except:
-                status = "ð´ Offline"
+                status = "🔴 Offline"
                 stopped_nodes += 1
         
         # Get current VPS count on this node
@@ -5186,7 +5166,7 @@ async def system_status(ctx):
         
         node_statuses.append(
             f"**{node['name']}** ({node_type})\n"
-            f"ð {node['location']} â¢ ð {node_vps_count}/{capacity} VPS ({usage_percentage:.0f}%)\n"
+            f"📍 {node['location']} • 📊 {node_vps_count}/{capacity} VPS ({usage_percentage:.0f}%)\n"
             f"Status: {status}"
         )
     
@@ -5195,13 +5175,13 @@ async def system_status(ctx):
     
     # Create main embed
     embed = create_embed(
-        title="ð System Status Dashboard",
+        title="📊 System Status Dashboard",
         description=f"**{BOT_NAME}** - Complete System Overview\n*Generated in {response_time:.0f}ms*",
         color=0x1a1a1a
     )
     
     # Bot & Uptime Section
-    add_field(embed, "ð¤ Bot Status", 
+    add_field(embed, "🤖 Bot Status", 
         f"**Uptime:** {bot_uptime}\n"
         f"**Latency:** {round(bot.latency * 1000)}ms\n"
         f"**Version:** {BOT_VERSION}\n"
@@ -5209,25 +5189,25 @@ async def system_status(ctx):
         True)
     
     # Nodes Section
-    add_field(embed, "ð Nodes Overview",
+    add_field(embed, "🌐 Nodes Overview",
         f"**Total Nodes:** {total_nodes}\n"
-        f"**Running:** {running_nodes} ð¢\n"
-        f"**Stopped:** {stopped_nodes} ð´\n"
+        f"**Running:** {running_nodes} 🟢\n"
+        f"**Stopped:** {stopped_nodes} 🔴\n"
         f"**Local/Remote:** {local_nodes}/{remote_nodes}",
         True)
     
     # VPS & Users Section
-    add_field(embed, "ð¥ Users & VPS",
+    add_field(embed, "👥 Users & VPS",
         f"**Total Users:** {total_users}\n"
         f"**Total VPS:** {total_vps}\n"
-        f"**Running:** {running_vps} ð¢\n"
-        f"**Stopped:** {stopped_vps} ð´\n"
-        f"**Suspended:** {suspended_vps} ð¡\n"
-        f"**Whitelisted:** {whitelisted_vps} â",
+        f"**Running:** {running_vps} 🟢\n"
+        f"**Stopped:** {stopped_vps} 🔴\n"
+        f"**Suspended:** {suspended_vps} 🟡\n"
+        f"**Whitelisted:** {whitelisted_vps} ✅",
         True)
     
     # Resources Section - Allocated vs Free
-    add_field(embed, "ð¾ Resource Allocation",
+    add_field(embed, "💾 Resource Allocation",
         f"**RAM Allocated:** {total_ram_allocated} GB\n"
         f"**RAM Free:** {total_node_ram_free:.1f} GB\n"
         f"**CPU Allocated:** {total_cpu_allocated} Cores\n"
@@ -5237,7 +5217,7 @@ async def system_status(ctx):
         True)
     
     # System & Admin Section
-    add_field(embed, "âï¸ System Information",
+    add_field(embed, "⚙️ System Information",
         f"**Total Admins:** {total_admins}\n"
         f"**Main Admin:** <@{MAIN_ADMIN_ID}>\n"
         f"**Ports Allocated:** {total_ports_allocated}\n"
@@ -5252,27 +5232,27 @@ async def system_status(ctx):
         chunks = [node_text[i:i+1024] for i in range(0, len(node_text), 1024)]
         
         for idx, chunk in enumerate(chunks, 1):
-            title = "ð¡ Node Details" if idx == 1 else f"ð¡ Node Details (Part {idx})"
+            title = "📡 Node Details" if idx == 1 else f"📡 Node Details (Part {idx})"
             add_field(embed, title, chunk, False)
     
     # System Health Indicator
-    health_status = "â Excellent"
+    health_status = "✅ Excellent"
     health_color = 0x00ff88
     
     if running_nodes == 0:
-        health_status = "ð´ Critical - No nodes running"
+        health_status = "🔴 Critical - No nodes running"
         health_color = 0xff3366
     elif stopped_nodes > 0:
-        health_status = "ð¡ Warning - Some nodes offline"
+        health_status = "🟡 Warning - Some nodes offline"
         health_color = 0xffaa00
     elif total_vps == 0:
-        health_status = "â¹ï¸ No VPS deployed"
+        health_status = "ℹ️ No VPS deployed"
         health_color = 0x00ccff
     
-    add_field(embed, "ð¥ System Health", health_status, False)
+    add_field(embed, "🏥 System Health", health_status, False)
     
     # Footer with current time
-    embed.set_footer(text=f"{BOT_NAME} System Status â¢ Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+    embed.set_footer(text=f"{BOT_NAME} System Status • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                     icon_url="https://i.imgur.com/dpatuSj.png")
     
     await ctx.send(embed=embed)
@@ -5318,55 +5298,18 @@ async def status_summary(ctx):
                 stopped_vps += 1
     
     embed = create_success_embed(
-        "ð Quick Status Summary",
-        f"**Nodes:** {running_nodes}/{total_nodes} ð¢\n"
+        "📈 Quick Status Summary",
+        f"**Nodes:** {running_nodes}/{total_nodes} 🟢\n"
         f"**VPS:** {total_vps} total\n"
-        f"â¢ Running: {running_vps} ð¢\n"
-        f"â¢ Stopped: {stopped_vps} ð´\n"
-        f"â¢ Suspended: {suspended_vps} ð¡\n"
-        f"**Users:** {total_users} ð¥\n"
+        f"• Running: {running_vps} 🟢\n"
+        f"• Stopped: {stopped_vps} 🔴\n"
+        f"• Suspended: {suspended_vps} 🟡\n"
+        f"**Users:** {total_users} 👥\n"
         f"**Bot Latency:** {round(bot.latency * 1000)}ms"
     )
     
     embed.set_footer(text=f"Use '{PREFIX}status' for detailed information")
     await ctx.send(embed=embed)
-
-@bot.command(name='maintenance')
-@is_admin()
-async def maintenance_toggle(ctx, mode: str = None):
-    """Turn maintenance mode on/off. Usage: !maintenance on | off | status"""
-    global MAINTENANCE_MODE
-    if mode is None or mode.lower() not in ('on', 'off', 'status'):
-        await ctx.send(embed=create_error_embed(
-            "Usage", f"`{PREFIX}maintenance on` / `{PREFIX}maintenance off` / `{PREFIX}maintenance status`"
-        ))
-        return
-
-    mode = mode.lower()
-    if mode == 'status':
-        state = "ð¢ ON" if MAINTENANCE_MODE else "ð´ OFF"
-        await ctx.send(embed=create_info_embed("Maintenance Mode", f"Current status: **{state}**"))
-        return
-
-    new_state = (mode == 'on')
-    if MAINTENANCE_MODE == new_state:
-        await ctx.send(embed=create_info_embed("Maintenance Mode", f"Maintenance mode is already **{'ON' if new_state else 'OFF'}**."))
-        return
-
-    MAINTENANCE_MODE = new_state
-    set_setting('maintenance_mode', '1' if new_state else '0')
-
-    if new_state:
-        await ctx.send(embed=create_success_embed(
-            "ð ï¸ Maintenance Mode Enabled",
-            f"Only admins can use commands now. Toggle off with `{PREFIX}maintenance off`."
-        ))
-    else:
-        await ctx.send(embed=create_success_embed(
-            "â Maintenance Mode Disabled",
-            "All users can use commands again."
-        ))
-
 
 @bot.command(name='admin-add')
 @is_main_admin()
@@ -5382,7 +5325,7 @@ async def admin_add(ctx, user: discord.Member):
     save_admin_data()
     await ctx.send(embed=create_success_embed("Admin Added", f"{user.mention} is now an admin!"))
     try:
-        await user.send(embed=create_embed("ð Admin Role Granted", f"You are now an admin by {ctx.author.mention}", 0x00ff88))
+        await user.send(embed=create_embed("🎉 Admin Role Granted", f"You are now an admin by {ctx.author.mention}", 0x00ff88))
     except discord.Forbidden:
         await ctx.send(embed=create_info_embed("Notification Failed", f"Could not DM {user.mention}"))
 
@@ -5400,7 +5343,7 @@ async def admin_remove(ctx, user: discord.Member):
     save_admin_data()
     await ctx.send(embed=create_success_embed("Admin Removed", f"{user.mention} is no longer an admin!"))
     try:
-        await user.send(embed=create_embed("â ï¸ Admin Role Revoked", f"Your admin role was removed by {ctx.author.mention}", 0xff3366))
+        await user.send(embed=create_embed("⚠️ Admin Role Revoked", f"Your admin role was removed by {ctx.author.mention}", 0xff3366))
     except discord.Forbidden:
         await ctx.send(embed=create_info_embed("Notification Failed", f"Could not DM {user.mention}"))
 
@@ -5409,20 +5352,20 @@ async def admin_remove(ctx, user: discord.Member):
 async def admin_list(ctx):
     admins = admin_data.get("admins", [])
     main_admin = await bot.fetch_user(MAIN_ADMIN_ID)
-    embed = create_embed("ð Admin Team", "Current administrators:", 0x1a1a1a)
-    add_field(embed, "ð° Main Admin", f"{main_admin.mention} (ID: {MAIN_ADMIN_ID})", False)
+    embed = create_embed("👑 Admin Team", "Current administrators:", 0x1a1a1a)
+    add_field(embed, "🔰 Main Admin", f"{main_admin.mention} (ID: {MAIN_ADMIN_ID})", False)
     if admins:
         admin_list = []
         for admin_id in admins:
             try:
                 admin_user = await bot.fetch_user(int(admin_id))
-                admin_list.append(f"â¢ {admin_user.mention} (ID: {admin_id})")
+                admin_list.append(f"• {admin_user.mention} (ID: {admin_id})")
             except:
-                admin_list.append(f"â¢ Unknown User (ID: {admin_id})")
+                admin_list.append(f"• Unknown User (ID: {admin_id})")
         admin_text = "\n".join(admin_list)
-        add_field(embed, "ð¡ï¸ Admins", admin_text, False)
+        add_field(embed, "🛡️ Admins", admin_text, False)
     else:
-        add_field(embed, "ð¡ï¸ Admins", "No additional admins", False)
+        add_field(embed, "🛡️ Admins", "No additional admins", False)
     await ctx.send(embed=embed)
 
 @bot.command(name="userinfo")
@@ -5431,16 +5374,16 @@ async def user_info(ctx, user: discord.Member):
     user_id = str(user.id)
     vps_list = vps_data.get(user_id, [])
 
-    # âââ Embed âââââââââââââââââââââââââââââââââââââââââââââââââ
+    # ─── Embed ─────────────────────────────────────────────────
     embed = create_embed(
-        title="ð¤ User Dashboard",
+        title="👤 User Dashboard",
         description=f"Statistics & resources for {user.mention}",
         color=0x1A1A1A
     )
 
-    # âââ Row 1 : User Info âââââââââââââââââââââââââââââââââââââ
+    # ─── Row 1 : User Info ─────────────────────────────────────
     embed.add_field(
-        name="ð¤ User",
+        name="👤 User",
         value=(
             f"**Name:** `{user.name}`\n"
             f"**ID:** `{user.id}`\n"
@@ -5451,18 +5394,18 @@ async def user_info(ctx, user: discord.Member):
 
     is_admin_user = user_id == str(MAIN_ADMIN_ID) or user_id in admin_data.get("admins", [])
     embed.add_field(
-        name="ð¡ï¸ Admin",
-        value="â Yes" if is_admin_user else "â No",
+        name="🛡️ Admin",
+        value="✅ Yes" if is_admin_user else "❌ No",
         inline=True
     )
 
     embed.add_field(
-        name="ð¥ï¸ VPS Count",
+        name="🖥️ VPS Count",
         value=f"`{len(vps_list)}` VPS",
         inline=True
     )
 
-    # âââ If VPS Exists âââââââââââââââââââââââââââââââââââââââââ
+    # ─── If VPS Exists ─────────────────────────────────────────
     if vps_list:
         total_ram = total_cpu = total_storage = 0
         running = suspended = whitelisted = 0
@@ -5482,37 +5425,37 @@ async def user_info(ctx, user: discord.Member):
             total_cpu += cpu
 
             if vps.get("suspended"):
-                status = "â SUSPENDED"
+                status = "⛔ SUSPENDED"
                 suspended += 1
             elif vps.get("status") == "running":
-                status = "ð¢ RUNNING"
+                status = "🟢 RUNNING"
                 running += 1
             else:
-                status = "ð´ STOPPED"
+                status = "🔴 STOPPED"
 
             if vps.get("whitelisted"):
                 whitelisted += 1
 
             vps_lines.append(
                 f"**{i}.** `{vps['container_name']}`\n"
-                f"{status} | `{ram}GB` RAM â¢ `{cpu}` CPU â¢ `{storage}GB` Disk\n"
-                f"ð Node: `{node_name}`"
+                f"{status} | `{ram}GB` RAM • `{cpu}` CPU • `{storage}GB` Disk\n"
+                f"📍 Node: `{node_name}`"
             )
 
-        # âââ Row 2 : VPS Summary ââââââââââââââââââââââââââââââââ
+        # ─── Row 2 : VPS Summary ────────────────────────────────
         embed.add_field(
-            name="ð VPS Summary",
+            name="📊 VPS Summary",
             value=(
-                f"ð¥ï¸ `{len(vps_list)}` Total\n"
-                f"ð¢ `{running}` Running\n"
-                f"â `{suspended}` Suspended\n"
-                f"â `{whitelisted}` Whitelisted"
+                f"🖥️ `{len(vps_list)}` Total\n"
+                f"🟢 `{running}` Running\n"
+                f"⛔ `{suspended}` Suspended\n"
+                f"✅ `{whitelisted}` Whitelisted"
             ),
             inline=True
         )
 
         embed.add_field(
-            name="ð Resources",
+            name="📈 Resources",
             value=(
                 f"**RAM:** `{total_ram} GB`\n"
                 f"**CPU:** `{total_cpu} Cores`\n"
@@ -5525,28 +5468,28 @@ async def user_info(ctx, user: discord.Member):
         port_used = get_user_used_ports(user_id)
 
         embed.add_field(
-            name="ð Ports",
+            name="🌐 Ports",
             value=f"`{port_used}/{port_quota}` Used",
             inline=True
         )
 
-        # âââ VPS List (Split if needed) ââââââââââââââââââââââââ
+        # ─── VPS List (Split if needed) ────────────────────────
         vps_text = "\n\n".join(vps_lines)
         for i in range(0, len(vps_text), 1024):
             embed.add_field(
-                name="ð VPS List",
+                name="📋 VPS List",
                 value=vps_text[i:i + 1024],
                 inline=False
             )
 
     else:
         embed.add_field(
-            name="ð¥ï¸ VPS",
-            value="â No VPS assigned",
+            name="🖥️ VPS",
+            value="❌ No VPS assigned",
             inline=False
         )
 
-    embed.set_footer(text="UnixNodes â¢ User Resource Dashboard")
+    embed.set_footer(text="UnixNodes • User Resource Dashboard")
     embed.timestamp = ctx.message.created_at
 
     await ctx.send(embed=embed)
@@ -5554,7 +5497,7 @@ async def user_info(ctx, user: discord.Member):
 @bot.command(name="serverstats")
 @is_admin()
 async def server_stats(ctx):
-    # âââ Counts ââââââââââââââââââââââââââââââââââââââââââââââââ
+    # ─── Counts ────────────────────────────────────────────────
     total_users = len(vps_data)
     total_admins = len(admin_data.get("admins", [])) + 1
     total_vps = sum(len(vps_list) for vps_list in vps_data.values())
@@ -5563,7 +5506,7 @@ async def server_stats(ctx):
     running_vps = suspended_vps = stopped_vps = 0
     whitelisted_vps = 0
 
-    # âââ VPS Data ââââââââââââââââââââââââââââââââââââââââââââââ
+    # ─── VPS Data ──────────────────────────────────────────────
     for vps_list in vps_data.values():
         for vps in vps_list:
             total_ram += int(vps.get("ram", "0GB").replace("GB", ""))
@@ -5581,7 +5524,7 @@ async def server_stats(ctx):
             if vps.get("whitelisted", False):
                 whitelisted_vps += 1
 
-    # âââ Ports âââââââââââââââââââââââââââââââââââââââââââââââââ
+    # ─── Ports ─────────────────────────────────────────────────
     conn = get_db()
     cur = conn.cursor()
 
@@ -5592,73 +5535,73 @@ async def server_stats(ctx):
     total_ports_used = cur.fetchone()[0] or 0
     conn.close()
 
-    # âââ Embed âââââââââââââââââââââââââââââââââââââââââââââââââ
+    # ─── Embed ─────────────────────────────────────────────────
     embed = create_embed(
-        title="ð Server Statistics",
+        title="📊 Server Statistics",
         description="**Live Infrastructure Dashboard**",
         color=0x1A1A1A
     )
 
-    # ââ Row 1 ââââââââââââââââââââââââââââââââââââââââââââââââââ
+    # ── Row 1 ──────────────────────────────────────────────────
     embed.add_field(
-        name="ð¥ Users",
+        name="👥 Users",
         value=f"`{total_users}` Users\n`{total_admins}` Admins",
         inline=True
     )
 
     embed.add_field(
-        name="ð¥ï¸ VPS",
+        name="🖥️ VPS",
         value=(
             f"Total: `{total_vps}`\n"
-            f"ð¢ `{running_vps}` Running\n"
-            f"â `{suspended_vps}` Suspended"
+            f"🟢 `{running_vps}` Running\n"
+            f"⛔ `{suspended_vps}` Suspended"
         ),
         inline=True
     )
 
     embed.add_field(
-        name="ð Status",
+        name="📌 Status",
         value=(
-            f"ð´ `{stopped_vps}` Stopped\n"
-            f"â `{whitelisted_vps}` Whitelisted"
+            f"🔴 `{stopped_vps}` Stopped\n"
+            f"✅ `{whitelisted_vps}` Whitelisted"
         ),
         inline=True
     )
 
-    # ââ Row 2 ââââââââââââââââââââââââââââââââââââââââââââââââââ
+    # ── Row 2 ──────────────────────────────────────────────────
     embed.add_field(
-        name="ð RAM",
+        name="📈 RAM",
         value=f"`{total_ram} GB`",
         inline=True
     )
 
     embed.add_field(
-        name="âï¸ CPU",
+        name="⚙️ CPU",
         value=f"`{total_cpu} Cores`",
         inline=True
     )
 
     embed.add_field(
-        name="ð¾ Storage",
+        name="💾 Storage",
         value=f"`{total_storage} GB`",
         inline=True
     )
 
-    # ââ Row 3 ââââââââââââââââââââââââââââââââââââââââââââââââââ
+    # ── Row 3 ──────────────────────────────────────────────────
     embed.add_field(
-        name="ð Ports Allocated",
+        name="🌐 Ports Allocated",
         value=f"`{total_ports_allocated}`",
         inline=True
     )
 
     embed.add_field(
-        name="ð Ports In Use",
+        name="🔌 Ports In Use",
         value=f"`{total_ports_used}`",
         inline=True
     )
 
     embed.add_field(
-        name="ð Utilization",
+        name="📊 Utilization",
         value=(
             f"`{total_ports_used}/{total_ports_allocated}`"
             if total_ports_allocated else "`N/A`"
@@ -5666,7 +5609,7 @@ async def server_stats(ctx):
         inline=True
     )
 
-    embed.set_footer(text="UnixNodes â¢ Real-Time Monitoring")
+    embed.set_footer(text="UnixNodes • Real-Time Monitoring")
     embed.timestamp = ctx.message.created_at
 
     await ctx.send(embed=embed)
@@ -5693,7 +5636,7 @@ async def vps_info(ctx, container_name: str = None):
         vps_text = "\n".join(all_vps)
         chunks = [vps_text[i:i+1024] for i in range(0, len(vps_text), 1024)]
         for idx, chunk in enumerate(chunks, 1):
-            embed = create_embed(f"ð¥ï¸ All VPS (Part {idx})", f"List of all VPS deployments", 0x1a1a1a)
+            embed = create_embed(f"🖥️ All VPS (Part {idx})", f"List of all VPS deployments", 0x1a1a1a)
             add_field(embed, "VPS List", chunk, False)
             await ctx.send(embed=embed)
     else:
@@ -5714,28 +5657,28 @@ async def vps_info(ctx, container_name: str = None):
         node_name = node['name'] if node else "Unknown"
         suspended_text = " (SUSPENDED)" if found_vps.get('suspended', False) else ""
         whitelisted_text = " (WHITELISTED)" if found_vps.get('whitelisted', False) else ""
-        embed = create_embed(f"ð¥ï¸ VPS Information - {container_name}", f"Details for VPS owned by {found_user.mention}{suspended_text}{whitelisted_text} on node {node_name}", 0x1a1a1a)
-        add_field(embed, "ð¤ Owner", f"**Name:** {found_user.name}\n**ID:** {found_user.id}", False)
-        add_field(embed, "ð Specifications", f"**RAM:** {found_vps['ram']}\n**CPU:** {found_vps['cpu']} Cores\n**Storage:** {found_vps['storage']}", False)
-        add_field(embed, "ð Status", f"**Current:** {found_vps.get('status', 'unknown').upper()}{suspended_text}{whitelisted_text}\n**Suspended:** {found_vps.get('suspended', False)}\n**Whitelisted:** {found_vps.get('whitelisted', False)}\n**Created:** {found_vps.get('created_at', 'Unknown')}", False)
+        embed = create_embed(f"🖥️ VPS Information - {container_name}", f"Details for VPS owned by {found_user.mention}{suspended_text}{whitelisted_text} on node {node_name}", 0x1a1a1a)
+        add_field(embed, "👤 Owner", f"**Name:** {found_user.name}\n**ID:** {found_user.id}", False)
+        add_field(embed, "📊 Specifications", f"**RAM:** {found_vps['ram']}\n**CPU:** {found_vps['cpu']} Cores\n**Storage:** {found_vps['storage']}", False)
+        add_field(embed, "📈 Status", f"**Current:** {found_vps.get('status', 'unknown').upper()}{suspended_text}{whitelisted_text}\n**Suspended:** {found_vps.get('suspended', False)}\n**Whitelisted:** {found_vps.get('whitelisted', False)}\n**Created:** {found_vps.get('created_at', 'Unknown')}", False)
         if 'config' in found_vps:
-            add_field(embed, "âï¸ Configuration", f"**Config:** {found_vps['config']}", False)
+            add_field(embed, "⚙️ Configuration", f"**Config:** {found_vps['config']}", False)
         if found_vps.get('shared_with'):
             shared_users = []
             for shared_id in found_vps['shared_with']:
                 try:
                     shared_user = await bot.fetch_user(int(shared_id))
-                    shared_users.append(f"â¢ {shared_user.mention}")
+                    shared_users.append(f"• {shared_user.mention}")
                 except:
-                    shared_users.append(f"â¢ Unknown User ({shared_id})")
+                    shared_users.append(f"• Unknown User ({shared_id})")
             shared_text = "\n".join(shared_users)
-            add_field(embed, "ð Shared With", shared_text, False)
+            add_field(embed, "🔗 Shared With", shared_text, False)
         conn = get_db()
         cur = conn.cursor()
         cur.execute('SELECT COUNT(*) FROM port_forwards WHERE vps_container = ?', (container_name,))
         port_count = cur.fetchone()[0]
         conn.close()
-        add_field(embed, "ð Active Ports", f"{port_count} forwarded ports (TCP/UDP)", False)
+        add_field(embed, "🌐 Active Ports", f"{port_count} forwarded ports (TCP/UDP)", False)
         await ctx.send(embed=embed)
 
 @bot.command(name='restart-vps')
@@ -5768,7 +5711,7 @@ async def execute_command(ctx, container_name: str, *, command: str):
         if output.strip():
             if len(output) > 1000:
                 output = output[:1000] + "\n... (truncated)"
-            add_field(embed, "ð¤ Output", f"```\n{output}\n```", False)
+            add_field(embed, "📤 Output", f"```\n{output}\n```", False)
         await ctx.send(embed=embed)
     except Exception as e:
         await ctx.send(embed=create_error_embed("Execution Failed", f"Error: {str(e)}"))
@@ -5776,7 +5719,7 @@ async def execute_command(ctx, container_name: str, *, command: str):
 @bot.command(name='stop-vps-all')
 @is_admin()
 async def stop_all_vps(ctx):
-    embed = create_warning_embed("Stopping All VPS", "â ï¸ **WARNING:** This will stop ALL running VPS on all nodes.\n\nThis action cannot be undone. Continue?")
+    embed = create_warning_embed("Stopping All VPS", "⚠️ **WARNING:** This will stop ALL running VPS on all nodes.\n\nThis action cannot be undone. Continue?")
     class ConfirmView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=60)
@@ -6000,12 +5943,12 @@ async def vps_stats(ctx, container_name: str):
     await ctx.send(embed=create_info_embed("Gathering Statistics", f"Collecting statistics for VPS `{container_name}`..."))
     try:
         stats = await get_container_stats(container_name, node_id)
-        embed = create_embed(f"ð VPS Statistics - {container_name}", f"Resource usage statistics", 0x1a1a1a)
-        add_field(embed, "ð Status", f"**{stats['status'].upper()}**", False)
-        add_field(embed, "ð» CPU Usage", f"**{stats['cpu']:.1f}%**", True)
-        add_field(embed, "ð§  Memory Usage", f"**{stats['ram']['used']}/{stats['ram']['total']} MB ({stats['ram']['pct']:.1f}%)**", True)
-        add_field(embed, "ð¾ Disk Usage", f"**{stats['disk']}**", True)
-        add_field(embed, "â±ï¸ Uptime", f"**{stats['uptime']}**", True)
+        embed = create_embed(f"📊 VPS Statistics - {container_name}", f"Resource usage statistics", 0x1a1a1a)
+        add_field(embed, "📈 Status", f"**{stats['status'].upper()}**", False)
+        add_field(embed, "💻 CPU Usage", f"**{stats['cpu']:.1f}%**", True)
+        add_field(embed, "🧠 Memory Usage", f"**{stats['ram']['used']}/{stats['ram']['total']} MB ({stats['ram']['pct']:.1f}%)**", True)
+        add_field(embed, "💾 Disk Usage", f"**{stats['disk']}**", True)
+        add_field(embed, "⏱️ Uptime", f"**{stats['uptime']}**", True)
         await ctx.send(embed=embed)
     except Exception as e:
         await ctx.send(embed=create_error_embed("Statistics Failed", f"Error: {str(e)}"))
@@ -6025,32 +5968,32 @@ async def node_check(ctx, node_id: int):
     
     # Check if node is reachable
     status = await get_node_status(node_id)
-    add_field(embed, "ð¡ Connection Status", status, False)
+    add_field(embed, "📡 Connection Status", status, False)
     
-    if status.startswith("ð¢"):
+    if status.startswith("🟢"):
         # Try to get storage pools
         try:
             pools_output = await execute_lxc("", "storage list", node_id=node_id, timeout=30)
-            add_field(embed, "ð¾ Available Storage Pools", f"```{pools_output}```", False)
+            add_field(embed, "💾 Available Storage Pools", f"```{pools_output}```", False)
             
             # Try to get default profile
             try:
                 profile_output = await execute_lxc("", "profile list", node_id=node_id, timeout=30)
-                add_field(embed, "ð Available Profiles", f"```{profile_output[:500]}...```", False)
+                add_field(embed, "📋 Available Profiles", f"```{profile_output[:500]}...```", False)
             except Exception as e:
-                add_field(embed, "ð Profiles", f"Error: {str(e)[:200]}", False)
+                add_field(embed, "📋 Profiles", f"Error: {str(e)[:200]}", False)
                 
         except Exception as e:
-            add_field(embed, "ð¾ Storage Pools", f"Error: {str(e)[:200]}", False)
+            add_field(embed, "💾 Storage Pools", f"Error: {str(e)[:200]}", False)
         
         # Check remote API endpoint
         try:
             test_response = requests.get(f"{node['url']}/api/ping", params={'api_key': node['api_key']}, timeout=5)
-            add_field(embed, "ð API Endpoint", f"â Reachable\nURL: {node['url']}", False)
+            add_field(embed, "🔌 API Endpoint", f"✅ Reachable\nURL: {node['url']}", False)
         except Exception as e:
-            add_field(embed, "ð API Endpoint", f"â Unreachable\nError: {str(e)[:200]}", False)
+            add_field(embed, "🔌 API Endpoint", f"❌ Unreachable\nError: {str(e)[:200]}", False)
     else:
-        add_field(embed, "â ï¸ Status", "Node is offline or unreachable", False)
+        add_field(embed, "⚠️ Status", "Node is offline or unreachable", False)
     
     await ctx.send(embed=embed)
 
@@ -6066,7 +6009,7 @@ async def vps_network(ctx, container_name: str, action: str, value: str = None):
             output = await execute_lxc(container_name, f"exec {container_name} -- ip addr", node_id=node_id)
             if len(output) > 1000:
                 output = output[:1000] + "\n... (truncated)"
-            embed = create_embed(f"ð Network Interfaces - {container_name}", "Network configuration", 0x1a1a1a)
+            embed = create_embed(f"🌐 Network Interfaces - {container_name}", "Network configuration", 0x1a1a1a)
             add_field(embed, "Interfaces", f"```\n{output}\n```", False)
             await ctx.send(embed=embed)
         elif action.lower() == "limit" and value:
@@ -6093,7 +6036,7 @@ async def vps_processes(ctx, container_name: str):
         output = await execute_lxc(container_name, f"exec {container_name} -- ps aux", node_id=node_id)
         if len(output) > 1000:
             output = output[:1000] + "\n... (truncated)"
-        embed = create_embed(f"âï¸ Processes - {container_name}", "Running processes", 0x1a1a1a)
+        embed = create_embed(f"⚙️ Processes - {container_name}", "Running processes", 0x1a1a1a)
         add_field(embed, "Process List", f"```\n{output}\n```", False)
         await ctx.send(embed=embed)
     except Exception as e:
@@ -6108,7 +6051,7 @@ async def vps_logs(ctx, container_name: str, lines: int = 50):
         output = await execute_lxc(container_name, f"exec {container_name} -- journalctl -n {lines}", node_id=node_id)
         if len(output) > 1000:
             output = output[:1000] + "\n... (truncated)"
-        embed = create_embed(f"ð Logs - {container_name}", f"Last {lines} log lines", 0x1a1a1a)
+        embed = create_embed(f"📋 Logs - {container_name}", f"Last {lines} log lines", 0x1a1a1a)
         add_field(embed, "System Logs", f"```\n{output}\n```", False)
         await ctx.send(embed=embed)
     except Exception as e:
@@ -6150,7 +6093,7 @@ async def suspend_vps(ctx, container_name: str, *, reason: str = "Admin action")
                     return
                 try:
                     owner = await bot.fetch_user(int(uid))
-                    embed = create_warning_embed("ð¨ VPS Suspended", f"Your VPS `{container_name}` has been suspended by an admin.\n\n**Reason:** {reason}\n\nContact an admin to unsuspend.")
+                    embed = create_warning_embed("🚨 VPS Suspended", f"Your VPS `{container_name}` has been suspended by an admin.\n\n**Reason:** {reason}\n\nContact an admin to unsuspend.")
                     await owner.send(embed=embed)
                 except Exception as dm_e:
                     logger.error(f"Failed to DM owner {uid}: {dm_e}")
@@ -6186,7 +6129,7 @@ async def unsuspend_vps(ctx, container_name: str):
                     await ctx.send(embed=create_error_embed("Start Failed", str(e)))
                 try:
                     owner = await bot.fetch_user(int(uid))
-                    embed = create_success_embed("ð¢ VPS Unsuspended", f"Your VPS `{container_name}` has been unsuspended by an admin.\nYou can now manage it again.")
+                    embed = create_success_embed("🟢 VPS Unsuspended", f"Your VPS `{container_name}` has been unsuspended by an admin.\nYou can now manage it again.")
                     await owner.send(embed=embed)
                 except Exception as dm_e:
                     logger.error(f"Failed to DM owner {uid} about unsuspension: {dm_e}")
@@ -6298,7 +6241,7 @@ async def resource_check(ctx):
                         save_vps_data()
                         try:
                             owner = await bot.fetch_user(int(user_id))
-                            warn_embed = create_warning_embed("ð¨ VPS Auto-Suspended", f"Your VPS `{container}` has been suspended due to high resource usage.\n\n**Reason:** {reason}\n\nContact admin to unsuspend and address the issue.")
+                            warn_embed = create_warning_embed("🚨 VPS Auto-Suspended", f"Your VPS `{container}` has been suspended due to high resource usage.\n\n**Reason:** {reason}\n\nContact admin to unsuspend and address the issue.")
                             await owner.send(embed=warn_embed)
                         except Exception as dm_e:
                             logger.error(f"Failed to DM owner {user_id}: {dm_e}")
@@ -6423,11 +6366,11 @@ async def about(ctx):
     
     # Performance metrics
     if latency < 100:
-        latency_status = "ð¢ Excellent"
+        latency_status = "🟢 Excellent"
     elif latency < 200:
-        latency_status = "ð¡ Good"
+        latency_status = "🟡 Good"
     else:
-        latency_status = "ð´ Poor"
+        latency_status = "🔴 Poor"
     
     add_field(embed, "Latency", f"```{latency}ms``` {latency_status}", True)
     add_field(embed, "Uptime", f"```{get_uptime()}```", True)
@@ -6435,9 +6378,9 @@ async def about(ctx):
     
     # Statistics
     stats_text = (
-        f"{format_list_item(f'Total VPS: {total_vps}')} ð¥ï¸\n"
-        f"{format_list_item(f'Active Users: {total_users}')} ð¥\n"
-        f"{format_list_item(f'Commands: 100+')} â¡"
+        f"{format_list_item(f'Total VPS: {total_vps}')} 🖥️\n"
+        f"{format_list_item(f'Active Users: {total_users}')} 👥\n"
+        f"{format_list_item(f'Commands: 100+')} ⚡"
     )
     add_field(embed, "Statistics", stats_text, False)
     
@@ -6481,12 +6424,12 @@ async def balance(ctx, user: discord.Member = None):
     
     # Main balance - prominent display
     balance_display = f"```\n{coins_data['balance']:,} coins\n```"
-    add_field(embed, "ð° Current Balance", balance_display, False)
+    add_field(embed, "💰 Current Balance", balance_display, False)
     
     # Financial metrics in a row
-    add_field(embed, "ï¿½ Total Earned", f"```{coins_data['total_earned']:,}```", True)
-    add_field(embed, "ð Total Spent", f"```{coins_data['total_spent']:,}```", True)
-    add_field(embed, "ðµ Net Worth", f"```{coins_data['balance']:,}```", True)
+    add_field(embed, "� Total Earned", f"```{coins_data['total_earned']:,}```", True)
+    add_field(embed, "📉 Total Spent", f"```{coins_data['total_spent']:,}```", True)
+    add_field(embed, "💵 Net Worth", f"```{coins_data['balance']:,}```", True)
     
     # Activity statistics
     invite_count = coins_data['invite_count']
@@ -6494,9 +6437,9 @@ async def balance(ctx, user: discord.Member = None):
     voice_minutes = coins_data['voice_minutes']
     
     activity_text = (
-        f"{format_list_item(f'Invites: {invite_count}')} ð¥\n"
-        f"{format_list_item(f'Messages: {message_count}')} ð¬\n"
-        f"{format_list_item(f'Voice Time: {voice_minutes} min')} ð¤"
+        f"{format_list_item(f'Invites: {invite_count}')} 👥\n"
+        f"{format_list_item(f'Messages: {message_count}')} 💬\n"
+        f"{format_list_item(f'Voice Time: {voice_minutes} min')} 🎤"
     )
     add_field(embed, "Activity Stats", activity_text, False)
     
@@ -6518,7 +6461,7 @@ async def daily_reward(ctx):
     
     # SECURITY: Check if user is restricted
     if is_user_restricted(user_id):
-        await ctx.send(embed=create_error_embed("â Access Restricted",
+        await ctx.send(embed=create_error_embed("❌ Access Restricted",
             "Your account has been restricted from earning coins due to suspicious activity.\n"
             "Contact an administrator for more information."))
         return
@@ -6529,7 +6472,7 @@ async def daily_reward(ctx):
         log_security_event(user_id, 'daily_spam',
                          'Excessive daily claim attempts',
                          'medium')
-        await ctx.send(embed=create_error_embed("â° Slow Down",
+        await ctx.send(embed=create_error_embed("⏰ Slow Down",
             "You're trying to claim too frequently. Please wait before trying again."))
         return
     
@@ -6660,9 +6603,9 @@ async def daily_reward(ctx):
         if not result[0]:
             _, hours, minutes, _, _, error = result
             if error:
-                embed = create_error_embed("â Error", f"An error occurred: {error}")
+                embed = create_error_embed("❌ Error", f"An error occurred: {error}")
             else:
-                embed = create_warning_embed("â° Daily Reward", 
+                embed = create_warning_embed("⏰ Daily Reward", 
                     f"You've already claimed your daily reward!\n"
                     f"Come back in **{hours}h {minutes}m**")
             await ctx.send(embed=embed)
@@ -6672,14 +6615,14 @@ async def daily_reward(ctx):
         
         total_reward = int(base_reward * streak_bonus)
         
-        embed = create_success_embed("ð Daily Reward Claimed!", 
+        embed = create_success_embed("🎁 Daily Reward Claimed!", 
             f"**Base Reward:** {base_reward} coins\n"
-            f"**Streak Bonus:** {int((streak_bonus - 1) * 100)}% (Day {streak_data['current_streak']} ð¥)\n"
+            f"**Streak Bonus:** {int((streak_bonus - 1) * 100)}% (Day {streak_data['current_streak']} 🔥)\n"
             f"**Total Earned:** {total_reward:,} coins\n"
             f"**New Balance:** {new_balance:,} coins\n\n"
             f"**Longest Streak:** {streak_data['longest_streak']} days")
         
-        add_field(embed, "ð¡ Tip", 
+        add_field(embed, "💡 Tip", 
             f"Claim daily to build your streak and earn more coins!\n"
             f"Next claim: Tomorrow at this time", False)
         
@@ -6687,7 +6630,7 @@ async def daily_reward(ctx):
         
     except Exception as e:
         logger.error(f"Error in daily_reward command: {e}")
-        embed = create_error_embed("â Error", "An error occurred while processing your daily reward. Please try again.")
+        embed = create_error_embed("❌ Error", "An error occurred while processing your daily reward. Please try again.")
         await ctx.send(embed=embed)
 
 @bot.command(name='leaderboard', aliases=['lb', 'top'])
@@ -6711,13 +6654,13 @@ async def leaderboard(ctx):
     
     top_users, user_rank, user_coins = await run_in_executor(get_leaderboard_data)
     
-    embed = create_embed("ð Coin Leaderboard", f"Top {limit} richest users", 0xf1c40f)
+    embed = create_embed("🏆 Coin Leaderboard", f"Top {limit} richest users", 0xf1c40f)
     
     if not top_users:
         add_field(embed, "No Data", "No users have earned coins yet!", False)
     else:
         leaderboard_text = []
-        medals = ["ð¥", "ð¥", "ð¥"]
+        medals = ["🥇", "🥈", "🥉"]
         
         for idx, user_data in enumerate(top_users, 1):
             try:
@@ -6725,7 +6668,7 @@ async def leaderboard(ctx):
                 medal = medals[idx-1] if idx <= 3 else f"**{idx}.**"
                 leaderboard_text.append(
                     f"{medal} {user.name} - **{user_data['balance']:,} coins**\n"
-                    f"   â³ Earned: {user_data['total_earned']:,} | "
+                    f"   ↳ Earned: {user_data['total_earned']:,} | "
                     f"Invites: {user_data['invite_count']} | "
                     f"Messages: {user_data['message_count']}"
                 )
@@ -6752,7 +6695,7 @@ async def transactions(ctx, limit: int = 10):
     # Run blocking database operation in executor
     txns = await run_in_executor(get_user_transactions, user_id, limit)
     
-    embed = create_info_embed("ð Transaction History", 
+    embed = create_info_embed("📜 Transaction History", 
         f"Last {len(txns)} transactions for {ctx.author.mention}")
     
     if not txns:
@@ -6761,13 +6704,13 @@ async def transactions(ctx, limit: int = 10):
         txn_text = []
         for txn in txns:
             amount = txn['amount']
-            emoji = "â" if amount > 0 else "â"
+            emoji = "➕" if amount > 0 else "➖"
             color = "+" if amount > 0 else ""
             created = datetime.fromisoformat(txn['created_at']).strftime('%m/%d %H:%M')
             
             txn_text.append(
                 f"{emoji} **{color}{amount:,} coins** - {txn['type']}\n"
-                f"   â³ {txn['description'] or 'No description'} ({created})"
+                f"   ↳ {txn['description'] or 'No description'} ({created})"
             )
         
         add_field(embed, "Recent Transactions", "\n\n".join(txn_text[:10]), False)
@@ -6818,25 +6761,25 @@ async def renew_vps_command(ctx, vps_number: int = None, days: int = 1):
         return
     
     # Confirm renewal
-    embed = create_warning_embed("ð° Confirm VPS Renewal", 
+    embed = create_warning_embed("💰 Confirm VPS Renewal", 
         f"**VPS:** `{vps['container_name']}`\n"
         f"**Duration:** {days} day(s)\n"
         f"**Cost:** {total_cost:,} coins\n"
         f"**Your Balance:** {coins_data['balance']:,} coins\n"
         f"**After Renewal:** {coins_data['balance'] - total_cost:,} coins\n\n"
-        f"React with â to confirm or â to cancel")
+        f"React with ✅ to confirm or ❌ to cancel")
     
     msg = await ctx.send(embed=embed)
-    await msg.add_reaction("â")
-    await msg.add_reaction("â")
+    await msg.add_reaction("✅")
+    await msg.add_reaction("❌")
     
     def check(reaction, user):
-        return user == ctx.author and str(reaction.emoji) in ["â", "â"] and reaction.message.id == msg.id
+        return user == ctx.author and str(reaction.emoji) in ["✅", "❌"] and reaction.message.id == msg.id
     
     try:
         reaction, user = await bot.wait_for('reaction_add', timeout=30.0, check=check)
         
-        if str(reaction.emoji) == "â":
+        if str(reaction.emoji) == "❌":
             await msg.edit(embed=create_info_embed("Cancelled", "VPS renewal cancelled."))
             return
         
@@ -6876,13 +6819,13 @@ async def renew_vps_command(ctx, vps_number: int = None, days: int = 1):
             
             save_vps_data()
             
-            success_embed = create_success_embed("â VPS Renewed Successfully!", 
+            success_embed = create_success_embed("✅ VPS Renewed Successfully!", 
                 f"**VPS:** `{vps['container_name']}`\n"
                 f"**Extended by:** {days} day(s)\n"
                 f"**New Expiry:** {new_expiry.strftime('%Y-%m-%d %H:%M:%S')}\n"
                 f"**Cost:** {total_cost:,} coins\n"
                 f"**New Balance:** {new_balance:,} coins\n\n"
-                f"Your VPS has been renewed! ð")
+                f"Your VPS has been renewed! 🎉")
             
             await msg.edit(embed=success_embed)
             
@@ -6956,7 +6899,7 @@ async def admin_renew_vps(ctx, user: discord.Member, vps_number: int, days: int)
     expiry_info = format_expiry_time(new_expiry.isoformat())
     
     # Create success embed
-    embed = create_success_embed("â VPS Expiry Updated (Admin)", 
+    embed = create_success_embed("✅ VPS Expiry Updated (Admin)", 
         f"**User:** {user.mention}\n"
         f"**VPS:** `{container_name}` (#{vps_number})\n"
         f"**Extended by:** {days} day(s)\n"
@@ -6965,18 +6908,18 @@ async def admin_renew_vps(ctx, user: discord.Member, vps_number: int, days: int)
         f"**Total Duration:** {vps.get('duration_days', 0)} days")
     
     if was_suspended:
-        add_field(embed, "ð Unsuspended", 
+        add_field(embed, "🔓 Unsuspended", 
             "VPS was suspended and has been unsuspended.\n"
             f"User can start it with `{PREFIX}manage`", False)
     
-    add_field(embed, "ð¡ Note", 
+    add_field(embed, "💡 Note", 
         "This renewal was done by admin (no coins charged)", False)
     
     await ctx.send(embed=embed)
     
     # Try to DM the user
     try:
-        dm_embed = create_success_embed("ð VPS Extended by Admin!", 
+        dm_embed = create_success_embed("🎁 VPS Extended by Admin!", 
             f"An admin has extended your VPS!\n\n"
             f"**VPS:** `{container_name}` (#{vps_number})\n"
             f"**Extended by:** {days} day(s)\n"
@@ -6984,7 +6927,7 @@ async def admin_renew_vps(ctx, user: discord.Member, vps_number: int, days: int)
             f"**Status:** {expiry_info['text']}")
         
         if was_suspended:
-            add_field(dm_embed, "ð Unsuspended", 
+            add_field(dm_embed, "🔓 Unsuspended", 
                 f"Your VPS was unsuspended! Use `{PREFIX}manage` to start it.", False)
         
         await user.send(embed=dm_embed)
@@ -7007,26 +6950,26 @@ async def renewal_config(ctx, setting: str = None, value: str = None):
         default_days = int(get_setting('default_vps_duration_days', 7))
         warning_hours = int(get_setting('vps_expiry_warning_hours', 24))
         
-        embed = create_info_embed("ð° VPS Renewal Configuration", 
+        embed = create_info_embed("💰 VPS Renewal Configuration", 
             "Current renewal system settings")
         
-        add_field(embed, "ðµ Renewal Costs", 
+        add_field(embed, "💵 Renewal Costs", 
             f"**1 Day:** {cost_1day} coins\n"
             f"**7 Days:** {cost_7days} coins\n"
             f"**30 Days:** {cost_30days} coins", True)
         
-        add_field(embed, "â° Expiration Settings", 
+        add_field(embed, "⏰ Expiration Settings", 
             f"**Default Duration:** {default_days} days\n"
             f"**Warning Time:** {warning_hours} hours before", True)
         
-        add_field(embed, "ð Available Settings", 
+        add_field(embed, "📝 Available Settings", 
             f"`cost_1day` - Cost for 1 day renewal\n"
             f"`cost_7days` - Cost for 7 days renewal\n"
             f"`cost_30days` - Cost for 30 days renewal\n"
             f"`default_days` - Default VPS duration\n"
             f"`warning_hours` - Hours before expiry to warn", False)
         
-        add_field(embed, "ð¡ Usage", 
+        add_field(embed, "💡 Usage", 
             f"`{PREFIX}renewconfig <setting> <value>`\n"
             f"Example: `{PREFIX}renewconfig cost_1day 100`", False)
         
@@ -7079,7 +7022,7 @@ async def renewal_config(ctx, setting: str = None, value: str = None):
         'warning_hours': 'Expiry Warning Time'
     }
     
-    embed = create_success_embed("â Setting Updated", 
+    embed = create_success_embed("✅ Setting Updated", 
         f"**{setting_names[setting]}** has been updated!\n\n"
         f"**New Value:** {int_value} {'coins' if 'cost' in setting else 'days' if 'days' in setting else 'hours'}\n\n"
         f"This will apply to all new renewals and VPS creations.")
@@ -7104,36 +7047,36 @@ async def renewal_prices(ctx):
     savings_7_pct = (savings_7 / (cost_1day * 7)) * 100
     savings_30_pct = (savings_30 / (cost_1day * 30)) * 100
     
-    embed = create_info_embed("ð° VPS Renewal Pricing", 
+    embed = create_info_embed("💰 VPS Renewal Pricing", 
         "Extend your VPS subscription with coins")
     
-    add_field(embed, "ð 1 Day Package", 
+    add_field(embed, "📅 1 Day Package", 
         f"**Cost:** {cost_1day} coins\n"
         f"**Per Day:** {cost_1day} coins\n"
         f"**Best For:** Short-term testing", True)
     
-    add_field(embed, "ð 7 Days Package", 
+    add_field(embed, "📅 7 Days Package", 
         f"**Cost:** {cost_7days} coins\n"
         f"**Per Day:** {per_day_7:.1f} coins\n"
         f"**Save:** {savings_7:.0f} coins ({savings_7_pct:.0f}%)\n"
         f"**Best For:** Weekly projects", True)
     
-    add_field(embed, "ð 30 Days Package", 
+    add_field(embed, "📅 30 Days Package", 
         f"**Cost:** {cost_30days} coins\n"
         f"**Per Day:** {per_day_30:.1f} coins\n"
         f"**Save:** {savings_30:.0f} coins ({savings_30_pct:.0f}%)\n"
         f"**Best For:** Long-term hosting", True)
     
-    add_field(embed, "ð¡ How to Renew", 
+    add_field(embed, "💡 How to Renew", 
         f"`{PREFIX}renew <vps_number> <days>`\n"
         f"Example: `{PREFIX}renew 1 7` (renew VPS #1 for 7 days)", False)
     
-    add_field(embed, "ðµ Earn Coins", 
+    add_field(embed, "💵 Earn Coins", 
         f"`{PREFIX}daily` - Daily reward\n"
         f"`{PREFIX}work` - Work for coins\n"
         f"`{PREFIX}coinhelp` - More ways to earn", False)
     
-    embed.set_footer(text=f"{BOT_NAME} â¢ Longer packages = Better value!")
+    embed.set_footer(text=f"{BOT_NAME} • Longer packages = Better value!")
     
     await ctx.send(embed=embed)
 
@@ -7143,7 +7086,7 @@ async def renewal_prices(ctx):
 
 @bot.command(name='create-deploy-plan', aliases=['add-deploy-plan', 'new-deploy-plan'])
 @is_admin()
-async def create_deploy_plan(ctx, name: str, ram: int, cpu: int, disk: int, days: int, cost: int, icon: str = "ð¦"):
+async def create_deploy_plan(ctx, name: str, ram: int, cpu: int, disk: int, days: int, cost: int, icon: str = "📦"):
     """Create a new deployment plan"""
     
     if ram < 1 or cpu < 1 or disk < 1 or days < 1 or cost < 1:
@@ -7175,7 +7118,7 @@ async def create_deploy_plan(ctx, name: str, ram: int, cpu: int, disk: int, days
         conn.commit()
         conn.close()
         
-        embed = create_success_embed("â Deployment Plan Created", 
+        embed = create_success_embed("✅ Deployment Plan Created", 
             f"**Plan ID:** {plan_id}\n"
             f"**Name:** {icon} {name}\n"
             f"**Resources:** {ram}GB RAM, {cpu} CPU, {disk}GB Disk\n"
@@ -7250,7 +7193,7 @@ async def edit_deploy_plan(ctx, plan_id: int, field: str, value: str):
         conn.commit()
         conn.close()
         
-        embed = create_success_embed("â Plan Updated", 
+        embed = create_success_embed("✅ Plan Updated", 
             f"**Plan ID:** {plan_id}\n"
             f"**Plan Name:** {plan['name']}\n"
             f"**Updated Field:** {field}\n"
@@ -7289,7 +7232,7 @@ async def delete_deploy_plan(ctx, plan_id: int):
         conn.commit()
         conn.close()
         
-        embed = create_success_embed("â Plan Deleted", 
+        embed = create_success_embed("✅ Plan Deleted", 
             f"**Plan ID:** {plan_id}\n"
             f"**Plan Name:** {plan['icon']} {plan['name']}\n"
             f"**Resources:** {plan['ram_gb']}GB RAM, {plan['cpu_cores']} CPU, {plan['disk_gb']}GB Disk\n\n"
@@ -7304,7 +7247,7 @@ async def delete_deploy_plan(ctx, plan_id: int):
 
 @bot.command(name='create-resource-plan', aliases=['add-resource-plan', 'new-resource-plan'])
 @is_admin()
-async def create_resource_plan(ctx, name: str, ram: int, cpu: int, disk: int, cost: int, icon: str = "â¡"):
+async def create_resource_plan(ctx, name: str, ram: int, cpu: int, disk: int, cost: int, icon: str = "⚡"):
     """Create a new resource upgrade plan"""
     
     if ram < 1 or cpu < 1 or disk < 1 or cost < 1:
@@ -7336,7 +7279,7 @@ async def create_resource_plan(ctx, name: str, ram: int, cpu: int, disk: int, co
         conn.commit()
         conn.close()
         
-        embed = create_success_embed("â Resource Plan Created", 
+        embed = create_success_embed("✅ Resource Plan Created", 
             f"**Plan ID:** {plan_id}\n"
             f"**Name:** {icon} {name}\n"
             f"**Resources:** {ram}GB RAM, {cpu} CPU, {disk}GB Disk\n"
@@ -7409,7 +7352,7 @@ async def edit_resource_plan(ctx, plan_id: int, field: str, value: str):
         conn.commit()
         conn.close()
         
-        embed = create_success_embed("â Plan Updated", 
+        embed = create_success_embed("✅ Plan Updated", 
             f"**Plan ID:** {plan_id}\n"
             f"**Plan Name:** {plan['name']}\n"
             f"**Updated Field:** {field}\n"
@@ -7448,7 +7391,7 @@ async def delete_resource_plan(ctx, plan_id: int):
         conn.commit()
         conn.close()
         
-        embed = create_success_embed("â Plan Deleted", 
+        embed = create_success_embed("✅ Plan Deleted", 
             f"**Plan ID:** {plan_id}\n"
             f"**Plan Name:** {plan['icon']} {plan['name']}\n"
             f"**Resources:** {plan['ram_gb']}GB RAM, {plan['cpu_cores']} CPU, {plan['disk_gb']}GB Disk\n\n"
@@ -7473,11 +7416,11 @@ async def list_deploy_plans_admin(ctx):
             "No deployment plans exist. Create one with `{PREFIX}create-deploy-plan`."))
         return
     
-    embed = create_info_embed("ð All Deployment Plans (Admin View)", 
+    embed = create_info_embed("📋 All Deployment Plans (Admin View)", 
         "All deployment plans including inactive ones")
     
     for plan in plans:
-        status = "â Active" if plan['active'] else "â Inactive"
+        status = "✅ Active" if plan['active'] else "❌ Inactive"
         plan_info = (
             f"**ID:** {plan['id']}\n"
             f"**Status:** {status}\n"
@@ -7489,7 +7432,7 @@ async def list_deploy_plans_admin(ctx):
         )
         add_field(embed, f"{plan['icon']} {plan['name']}", plan_info, True)
     
-    add_field(embed, "ð¡ Management", 
+    add_field(embed, "💡 Management", 
         f"**Create:** `{PREFIX}create-deploy-plan <name> <ram> <cpu> <disk> <days> <cost> [icon]`\n"
         f"**Edit:** `{PREFIX}edit-deploy-plan <id> <field> <value>`\n"
         f"**Delete:** `{PREFIX}delete-deploy-plan <id>`", False)
@@ -7508,11 +7451,11 @@ async def list_resource_plans_admin(ctx):
             f"No resource plans exist. Create one with `{PREFIX}create-resource-plan`."))
         return
     
-    embed = create_info_embed("ð All Resource Plans (Admin View)", 
+    embed = create_info_embed("📋 All Resource Plans (Admin View)", 
         "All resource upgrade plans including inactive ones")
     
     for plan in plans:
-        status = "â Active" if plan['active'] else "â Inactive"
+        status = "✅ Active" if plan['active'] else "❌ Inactive"
         plan_info = (
             f"**ID:** {plan['id']}\n"
             f"**Status:** {status}\n"
@@ -7523,7 +7466,7 @@ async def list_resource_plans_admin(ctx):
         )
         add_field(embed, f"{plan['icon']} {plan['name']}", plan_info, True)
     
-    add_field(embed, "ð¡ Management", 
+    add_field(embed, "💡 Management", 
         f"**Create:** `{PREFIX}create-resource-plan <name> <ram> <cpu> <disk> <cost> [icon]`\n"
         f"**Edit:** `{PREFIX}edit-resource-plan <id> <field> <value>`\n"
         f"**Delete:** `{PREFIX}delete-resource-plan <id>`", False)
@@ -7581,7 +7524,7 @@ async def create_coupon_command(ctx, coins: int, code: str, max_uses: int = None
         expiry_text = f"{expires_in_days} days" if expires_in_days else "Never"
         uses_text = f"{max_uses} uses" if max_uses else "Unlimited"
         
-        embed = create_success_embed("â Coupon Created", 
+        embed = create_success_embed("✅ Coupon Created", 
             f"**Code:** `{code.upper()}`\n"
             f"**Coins:** {coins:,}\n"
             f"**Max Uses:** {uses_text}\n"
@@ -7625,22 +7568,22 @@ async def list_coupons_command(ctx, show_all: str = None):
             "No coupon codes exist. Create one with `{PREFIX}create-coupon`."))
         return
     
-    embed = create_info_embed("ð³ Coupon Codes (Admin View)", 
+    embed = create_info_embed("💳 Coupon Codes (Admin View)", 
         f"{'All coupon codes' if show_inactive else 'Active coupon codes only'}")
     
     for coupon in coupons[:25]:  # Limit to 25 to avoid embed limits
-        status = "â Active" if coupon['active'] else "â Disabled"
+        status = "✅ Active" if coupon['active'] else "❌ Disabled"
         
         # Expiry info
         if coupon['expires_at']:
             expiry_dt = datetime.fromisoformat(coupon['expires_at'])
             if datetime.now() > expiry_dt:
-                expiry_text = f"â Expired ({expiry_dt.strftime('%Y-%m-%d')})"
+                expiry_text = f"❌ Expired ({expiry_dt.strftime('%Y-%m-%d')})"
             else:
                 days_left = (expiry_dt - datetime.now()).days
-                expiry_text = f"â° {days_left} days left"
+                expiry_text = f"⏰ {days_left} days left"
         else:
-            expiry_text = "â¾ï¸ Never expires"
+            expiry_text = "♾️ Never expires"
         
         # Usage info
         if coupon['max_uses']:
@@ -7660,12 +7603,12 @@ async def list_coupons_command(ctx, show_all: str = None):
             f"`{PREFIX}delete-coupon {coupon['id']}` - Delete"
         )
         
-        add_field(embed, f"ð³ {coupon['code']}", coupon_info, True)
+        add_field(embed, f"💳 {coupon['code']}", coupon_info, True)
     
     if len(coupons) > 25:
         embed.set_footer(text=f"Showing 25 of {len(coupons)} coupons")
     
-    add_field(embed, "ð¡ Management", 
+    add_field(embed, "💡 Management", 
         f"**Create:** `{PREFIX}create-coupon <coins> <code> [max_uses] [days]`\n"
         f"**Stats:** `{PREFIX}coupon-stats <id>`\n"
         f"**Disable:** `{PREFIX}disable-coupon <id>`\n"
@@ -7695,18 +7638,18 @@ async def coupon_stats_command(ctx, coupon_id: int):
     coupon = stats['coupon']
     
     # Status
-    status = "â Active" if coupon['active'] else "â Disabled"
+    status = "✅ Active" if coupon['active'] else "❌ Disabled"
     
     # Expiry
     if coupon['expires_at']:
         expiry_dt = datetime.fromisoformat(coupon['expires_at'])
         if datetime.now() > expiry_dt:
-            expiry_text = f"â Expired on {expiry_dt.strftime('%Y-%m-%d %H:%M')}"
+            expiry_text = f"❌ Expired on {expiry_dt.strftime('%Y-%m-%d %H:%M')}"
         else:
             days_left = (expiry_dt - datetime.now()).days
-            expiry_text = f"â° Expires in {days_left} days ({expiry_dt.strftime('%Y-%m-%d')})"
+            expiry_text = f"⏰ Expires in {days_left} days ({expiry_dt.strftime('%Y-%m-%d')})"
     else:
-        expiry_text = "â¾ï¸ Never expires"
+        expiry_text = "♾️ Never expires"
     
     # Usage
     if coupon['max_uses']:
@@ -7716,21 +7659,21 @@ async def coupon_stats_command(ctx, coupon_id: int):
     else:
         usage_text = f"{coupon['current_uses']} times\nUnlimited uses"
     
-    embed = create_info_embed(f"ð³ Coupon: {coupon['code']}", 
+    embed = create_info_embed(f"💳 Coupon: {coupon['code']}", 
         f"Detailed statistics for coupon #{coupon_id}")
     
-    add_field(embed, "ð Basic Info", 
+    add_field(embed, "📊 Basic Info", 
         f"**Code:** `{coupon['code']}`\n"
         f"**Status:** {status}\n"
         f"**Coins:** {coupon['coins']:,}\n"
         f"**Created:** {datetime.fromisoformat(coupon['created_at']).strftime('%Y-%m-%d %H:%M')}", True)
     
-    add_field(embed, "ð Usage Stats", 
+    add_field(embed, "📈 Usage Stats", 
         f"**Times Used:** {usage_text}\n"
         f"**Total Coins Given:** {stats['total_coins']:,}\n"
         f"**Unique Users:** {stats['redemptions']}", True)
     
-    add_field(embed, "â° Expiry", expiry_text, True)
+    add_field(embed, "⏰ Expiry", expiry_text, True)
     
     # Recent redemptions
     if stats['recent']:
@@ -7739,13 +7682,13 @@ async def coupon_stats_command(ctx, coupon_id: int):
             user_id = redemption['user_id']
             coins = redemption['coins_received']
             date = datetime.fromisoformat(redemption['redeemed_at']).strftime('%Y-%m-%d %H:%M')
-            recent_text.append(f"â¢ <@{user_id}>: {coins:,} coins ({date})")
+            recent_text.append(f"• <@{user_id}>: {coins:,} coins ({date})")
         
-        add_field(embed, "ð Recent Redemptions", "\n".join(recent_text), False)
+        add_field(embed, "🕐 Recent Redemptions", "\n".join(recent_text), False)
     else:
-        add_field(embed, "ð Recent Redemptions", "No redemptions yet", False)
+        add_field(embed, "🕐 Recent Redemptions", "No redemptions yet", False)
     
-    add_field(embed, "ð¡ Management", 
+    add_field(embed, "💡 Management", 
         f"`{PREFIX}disable-coupon {coupon_id}` - Disable coupon\n"
         f"`{PREFIX}enable-coupon {coupon_id}` - Enable coupon\n"
         f"`{PREFIX}delete-coupon {coupon_id}` - Delete permanently", False)
@@ -7781,7 +7724,7 @@ async def disable_coupon_command(ctx, coupon_id: int):
         conn.commit()
         conn.close()
         
-        embed = create_success_embed("â Coupon Disabled", 
+        embed = create_success_embed("✅ Coupon Disabled", 
             f"**Code:** `{coupon['code']}`\n"
             f"**Coupon ID:** {coupon_id}\n\n"
             f"This coupon can no longer be redeemed.\n"
@@ -7823,7 +7766,7 @@ async def enable_coupon_command(ctx, coupon_id: int):
         conn.commit()
         conn.close()
         
-        embed = create_success_embed("â Coupon Enabled", 
+        embed = create_success_embed("✅ Coupon Enabled", 
             f"**Code:** `{coupon['code']}`\n"
             f"**Coupon ID:** {coupon_id}\n\n"
             f"This coupon can now be redeemed again.\n"
@@ -7869,7 +7812,7 @@ async def delete_coupon_command(ctx, coupon_id: int):
         conn.commit()
         conn.close()
         
-        embed = create_success_embed("â Coupon Deleted", 
+        embed = create_success_embed("✅ Coupon Deleted", 
             f"**Code:** `{coupon['code']}`\n"
             f"**Coupon ID:** {coupon_id}\n"
             f"**Total Redemptions:** {redemptions}\n\n"
@@ -7916,22 +7859,22 @@ async def security_logs_command(ctx, user: discord.Member = None, limit: int = 2
         conn.close()
         
         if not logs:
-            await ctx.send(embed=create_info_embed("ð Security Logs",
+            await ctx.send(embed=create_info_embed("🔒 Security Logs",
                 "No security events found."))
             return
         
-        embed = create_info_embed("ð Security Logs",
+        embed = create_info_embed("🔒 Security Logs",
             f"Showing {len(logs)} most recent security events")
         
         for log in logs[:10]:  # Show max 10 in embed
             severity_emoji = {
-                'low': 'ð¢',
-                'medium': 'ð¡',
-                'high': 'ð´',
-                'critical': 'ð¨'
-            }.get(log['severity'], 'âª')
+                'low': '🟢',
+                'medium': '🟡',
+                'high': '🔴',
+                'critical': '🚨'
+            }.get(log['severity'], '⚪')
             
-            flag_emoji = 'ð©' if log['flagged'] else ''
+            flag_emoji = '🚩' if log['flagged'] else ''
             
             log_text = (
                 f"{severity_emoji} **{log['activity_type']}** {flag_emoji}\n"
@@ -7995,29 +7938,29 @@ async def trust_score_command(ctx, user: discord.Member):
         # Determine status color
         if trust_score >= 80:
             color = 0x2ecc71  # Green
-            status = "â Trusted"
+            status = "✅ Trusted"
         elif trust_score >= 50:
             color = 0xf39c12  # Orange
-            status = "â ï¸ Caution"
+            status = "⚠️ Caution"
         elif trust_score >= 20:
             color = 0xe74c3c  # Red
-            status = "ð´ Warning"
+            status = "🔴 Warning"
         else:
             color = 0x95a5a6  # Gray
-            status = "ð« High Risk"
+            status = "🚫 High Risk"
         
-        embed = create_embed(f"ð Trust Score: {user.name}", status, color)
+        embed = create_embed(f"🔒 Trust Score: {user.name}", status, color)
         
-        add_field(embed, "ð Trust Score", f"**{trust_score}/100**", True)
-        add_field(embed, "â ï¸ Warnings", str(warnings), True)
-        add_field(embed, "â Violations", str(violations), True)
-        add_field(embed, "ð¨ High Severity Events", str(high_severity_count), True)
-        add_field(embed, "ð Restricted", "Yes" if restricted else "No", True)
+        add_field(embed, "📊 Trust Score", f"**{trust_score}/100**", True)
+        add_field(embed, "⚠️ Warnings", str(warnings), True)
+        add_field(embed, "❌ Violations", str(violations), True)
+        add_field(embed, "🚨 High Severity Events", str(high_severity_count), True)
+        add_field(embed, "🔒 Restricted", "Yes" if restricted else "No", True)
         
         if notes:
-            add_field(embed, "ð Notes", notes[-500:], False)  # Last 500 chars
+            add_field(embed, "📝 Notes", notes[-500:], False)  # Last 500 chars
         
-        add_field(embed, "ð¡ Actions",
+        add_field(embed, "💡 Actions",
             f"`{PREFIX}restrict-user @user` - Restrict from earning coins\n"
             f"`{PREFIX}unrestrict-user @user` - Remove restriction\n"
             f"`{PREFIX}reset-trust @user` - Reset trust score to 100\n"
@@ -8062,7 +8005,7 @@ async def restrict_user_command(ctx, user: discord.Member, *, reason: str = "Adm
                          f'Restricted by {ctx.author.name}: {reason}',
                          'high')
         
-        embed = create_success_embed("ð User Restricted",
+        embed = create_success_embed("🔒 User Restricted",
             f"**User:** {user.mention}\n"
             f"**Reason:** {reason}\n\n"
             f"This user can no longer earn coins through any method.\n"
@@ -8072,7 +8015,7 @@ async def restrict_user_command(ctx, user: discord.Member, *, reason: str = "Adm
         
         # Notify user
         try:
-            user_embed = create_error_embed("ð Account Restricted",
+            user_embed = create_error_embed("🔒 Account Restricted",
                 f"Your account has been restricted from earning coins.\n\n"
                 f"**Reason:** {reason}\n\n"
                 f"Contact an administrator for more information.")
@@ -8108,7 +8051,7 @@ async def unrestrict_user_command(ctx, user: discord.Member):
         conn.commit()
         conn.close()
         
-        embed = create_success_embed("â Restriction Removed",
+        embed = create_success_embed("✅ Restriction Removed",
             f"**User:** {user.mention}\n\n"
             f"This user can now earn coins again.")
         
@@ -8116,7 +8059,7 @@ async def unrestrict_user_command(ctx, user: discord.Member):
         
         # Notify user
         try:
-            user_embed = create_success_embed("â Restriction Removed",
+            user_embed = create_success_embed("✅ Restriction Removed",
                 "Your account restriction has been lifted.\n"
                 "You can now earn coins again!")
             await user.send(embed=user_embed)
@@ -8153,7 +8096,7 @@ async def reset_trust_command(ctx, user: discord.Member):
         conn.commit()
         conn.close()
         
-        embed = create_success_embed("â Trust Score Reset",
+        embed = create_success_embed("✅ Trust Score Reset",
             f"**User:** {user.mention}\n"
             f"**New Score:** 100/100\n\n"
             f"Warnings and violations have been cleared.")
@@ -8175,40 +8118,40 @@ async def coin_help(ctx):
     message_cooldown = int(get_setting('message_cooldown_seconds', 60))
     voice_min_duration = int(get_setting('voice_min_duration_minutes', 5))
     
-    embed = create_embed("ð° How to Earn Coins", "All the ways to earn coins!", 0xf1c40f)
+    embed = create_embed("💰 How to Earn Coins", "All the ways to earn coins!", 0xf1c40f)
     
-    add_field(embed, "ð Daily Reward", 
+    add_field(embed, "🎁 Daily Reward", 
         f"**{coins_daily} coins** per day\n"
         f"Command: `{PREFIX}daily`\n"
         f"Claim once every 24 hours!", False)
     
-    add_field(embed, "ð¥ Invite Members", 
+    add_field(embed, "👥 Invite Members", 
         f"**{coins_per_invite} coins** per invite\n"
         f"Invite friends to the server!\n"
         f"Automatic reward when they join", False)
     
-    add_field(embed, "ð¬ Send Messages", 
+    add_field(embed, "💬 Send Messages", 
         f"**{coins_per_message} coin** per message\n"
         f"Cooldown: {message_cooldown} seconds\n"
         f"Chat actively to earn!", False)
     
-    add_field(embed, "ð¤ Voice Activity", 
+    add_field(embed, "🎤 Voice Activity", 
         f"**{coins_per_voice_min} coins** per minute\n"
         f"Minimum: {voice_min_duration} minutes\n"
         f"Join voice channels!", False)
     
-    add_field(embed, "ï¿½ Redeem Coupons", 
+    add_field(embed, "� Redeem Coupons", 
         f"**Redeem coupon codes** for instant coins!\n"
         f"Command: `{PREFIX}redeem <code>`\n"
         f"Watch for codes in announcements!", False)
     
-    add_field(embed, "ï¿½ Coin Uses", 
-        f"â¢ Renew VPS: `{PREFIX}renew <vps#> <days>`\n"
-        f"â¢ Deploy VPS: `{PREFIX}deploy <plan_id>`\n"
-        f"â¢ Upgrade VPS: `{PREFIX}upgrade <vps#> <plan_id>`\n"
-        f"â¢ Shop items: `{PREFIX}shop`", False)
+    add_field(embed, "� Coin Uses", 
+        f"• Renew VPS: `{PREFIX}renew <vps#> <days>`\n"
+        f"• Deploy VPS: `{PREFIX}deploy <plan_id>`\n"
+        f"• Upgrade VPS: `{PREFIX}upgrade <vps#> <plan_id>`\n"
+        f"• Shop items: `{PREFIX}shop`", False)
     
-    add_field(embed, "ð Check Your Stats", 
+    add_field(embed, "📊 Check Your Stats", 
         f"`{PREFIX}balance` - Check your coins\n"
         f"`{PREFIX}leaderboard` - See top earners\n"
         f"`{PREFIX}transactions` - View history", False)
@@ -8227,7 +8170,7 @@ async def give_coins(ctx, user: discord.Member, amount: int, *, reason: str = "A
     # Run in executor
     new_balance = await run_in_executor(add_coins, user_id, amount, 'admin_give', reason)
     
-    embed = create_success_embed("ð° Coins Given", 
+    embed = create_success_embed("💰 Coins Given", 
         f"Gave **{amount:,} coins** to {user.mention}\n"
         f"Reason: {reason}\n"
         f"Their new balance: **{new_balance:,} coins**")
@@ -8236,7 +8179,7 @@ async def give_coins(ctx, user: discord.Member, amount: int, *, reason: str = "A
     
     # Notify user
     try:
-        dm_embed = create_success_embed("ð You Received Coins!", 
+        dm_embed = create_success_embed("🎁 You Received Coins!", 
             f"An admin gave you **{amount:,} coins**!\n"
             f"Reason: {reason}\n"
             f"New balance: **{new_balance:,} coins**")
@@ -8261,7 +8204,7 @@ async def remove_coins_command(ctx, user: discord.Member, amount: int, *, reason
             f"{user.mention} only has **{new_balance:,} coins**."))
         return
     
-    embed = create_success_embed("ð¸ Coins Removed", 
+    embed = create_success_embed("💸 Coins Removed", 
         f"Removed **{amount:,} coins** from {user.mention}\n"
         f"Reason: {reason}\n"
         f"Their new balance: **{new_balance:,} coins**")
@@ -8270,7 +8213,7 @@ async def remove_coins_command(ctx, user: discord.Member, amount: int, *, reason
     
     # Notify user
     try:
-        dm_embed = create_warning_embed("â ï¸ Coins Removed", 
+        dm_embed = create_warning_embed("⚠️ Coins Removed", 
             f"An admin removed **{amount:,} coins** from your account.\n"
             f"Reason: {reason}\n"
             f"New balance: **{new_balance:,} coins**")
@@ -8305,7 +8248,7 @@ async def set_coins_command(ctx, user: discord.Member, amount: int):
     
     current_balance, diff = await run_in_executor(set_balance)
     
-    embed = create_success_embed("ð° Balance Set", 
+    embed = create_success_embed("💰 Balance Set", 
         f"Set {user.mention}'s balance to **{amount:,} coins**\n"
         f"Previous balance: **{current_balance:,} coins**\n"
         f"Change: **{diff:+,} coins**")
@@ -8319,7 +8262,7 @@ async def coin_config(ctx, setting: str = None, value: str = None):
     
     if setting is None:
         # Show all settings
-        embed = create_info_embed("âï¸ Coin Economy Settings", "Current configuration")
+        embed = create_info_embed("⚙️ Coin Economy Settings", "Current configuration")
         
         settings_to_show = [
             ('coins_per_invite', 'Coins per Invite'),
@@ -8359,7 +8302,7 @@ async def coin_config(ctx, setting: str = None, value: str = None):
         int(value)
         set_setting(setting, value)
         
-        embed = create_success_embed("â Setting Updated", 
+        embed = create_success_embed("✅ Setting Updated", 
             f"**{setting}** = `{value}`\n\n"
             f"The new value will take effect immediately.")
         
@@ -8391,9 +8334,9 @@ async def achievements_command(ctx, user: discord.Member = None):
     
     unlocked_ids = [a['id'] for a in unlocked]
     
-    embed = create_embed("ð Achievements", f"Progress for {target_user.mention}", 0xf1c40f)
+    embed = create_embed("🏆 Achievements", f"Progress for {target_user.mention}", 0xf1c40f)
     
-    add_field(embed, "ð Progress", 
+    add_field(embed, "📊 Progress", 
         f"**Unlocked:** {len(unlocked)}/{len(all_achievements)}\n"
         f"**Completion:** {int(len(unlocked)/len(all_achievements)*100)}%", True)
     
@@ -8404,11 +8347,11 @@ async def achievements_command(ctx, user: discord.Member = None):
         if cat not in categories:
             categories[cat] = []
         
-        status = "â" if ach['id'] in unlocked_ids else "ð"
+        status = "✅" if ach['id'] in unlocked_ids else "🔒"
         categories[cat].append(f"{status} {ach['icon']} **{ach['name']}** - {ach['reward_coins']} coins")
     
     for cat, achs in categories.items():
-        add_field(embed, f"ð {cat.title()}", "\n".join(achs[:5]), False)
+        add_field(embed, f"📁 {cat.title()}", "\n".join(achs[:5]), False)
         if len(achs) > 5:
             add_field(embed, "...", f"And {len(achs)-5} more", False)
     
@@ -8427,7 +8370,7 @@ async def quests_command(ctx):
     
     daily_quests, weekly_quests = await run_in_executor(get_quests_data)
     
-    embed = create_embed("ð Active Quests", "Complete quests to earn bonus coins!", 0x9b59b6)
+    embed = create_embed("📜 Active Quests", "Complete quests to earn bonus coins!", 0x9b59b6)
     
     if daily_quests:
         daily_text = []
@@ -8438,13 +8381,13 @@ async def quests_command(ctx):
             completed = quest.get('completed', 0)
             
             if completed:
-                status = "â"
-                bar = "â" * 10
+                status = "✅"
+                bar = "█" * 10
             else:
-                status = "ð"
+                status = "🔄"
                 pct = min(progress / required, 1.0)
                 filled = int(pct * 10)
-                bar = "â" * filled + "â" * (10 - filled)
+                bar = "█" * filled + "░" * (10 - filled)
             
             daily_text.append(
                 f"{status} **{quest['name']}**\n"
@@ -8452,7 +8395,7 @@ async def quests_command(ctx):
                 f"   Reward: {reward} coins"
             )
         
-        add_field(embed, "ð Daily Quests", "\n\n".join(daily_text), False)
+        add_field(embed, "📅 Daily Quests", "\n\n".join(daily_text), False)
     
     if weekly_quests:
         weekly_text = []
@@ -8463,13 +8406,13 @@ async def quests_command(ctx):
             completed = quest.get('completed', 0)
             
             if completed:
-                status = "â"
-                bar = "â" * 10
+                status = "✅"
+                bar = "█" * 10
             else:
-                status = "ð"
+                status = "🔄"
                 pct = min(progress / required, 1.0)
                 filled = int(pct * 10)
-                bar = "â" * filled + "â" * (10 - filled)
+                bar = "█" * filled + "░" * (10 - filled)
             
             weekly_text.append(
                 f"{status} **{quest['name']}**\n"
@@ -8477,7 +8420,7 @@ async def quests_command(ctx):
                 f"   Reward: {reward} coins"
             )
         
-        add_field(embed, "ð Weekly Quests", "\n\n".join(weekly_text), False)
+        add_field(embed, "📆 Weekly Quests", "\n\n".join(weekly_text), False)
     
     await ctx.send(embed=embed)
 
@@ -8487,16 +8430,16 @@ async def redeem_coupon_command(ctx, code: str = None):
     user_id = str(ctx.author.id)
     
     if not code:
-        embed = create_info_embed("ð³ Redeem Coupon", 
+        embed = create_info_embed("💳 Redeem Coupon", 
             f"Enter a coupon code to receive coins!\n\n"
             f"**Usage:** `{PREFIX}redeem <code>`\n"
             f"**Example:** `{PREFIX}redeem WELCOME2024`\n\n"
             f"**Where to get codes:**\n"
-            f"â¢ Server events and giveaways\n"
-            f"â¢ Social media promotions\n"
-            f"â¢ Special announcements\n"
-            f"â¢ Community rewards\n\n"
-            f"ð¡ Codes are case-insensitive")
+            f"• Server events and giveaways\n"
+            f"• Social media promotions\n"
+            f"• Special announcements\n"
+            f"• Community rewards\n\n"
+            f"💡 Codes are case-insensitive")
         await ctx.send(embed=embed)
         return
     
@@ -8513,25 +8456,25 @@ async def redeem_coupon_command(ctx, code: str = None):
         
         new_balance = await run_in_executor(get_balance)
         
-        embed = create_success_embed("ð Coupon Redeemed!", 
+        embed = create_success_embed("🎉 Coupon Redeemed!", 
             f"You've successfully redeemed the coupon!\n\n"
             f"**Code:** `{code.upper()}`\n"
             f"**Coins Received:** +{coins:,} coins\n"
             f"**New Balance:** {new_balance:,} coins\n\n"
-            f"ð° Enjoy your coins!")
+            f"💰 Enjoy your coins!")
         
         await ctx.send(embed=embed)
         logger.info(f"User {ctx.author.name} redeemed coupon {code} for {coins} coins")
     else:
-        embed = create_error_embed("â Redemption Failed", 
+        embed = create_error_embed("❌ Redemption Failed", 
             f"{message}\n\n"
             f"**Code Entered:** `{code.upper()}`\n\n"
             f"**Common Issues:**\n"
-            f"â¢ Code already used by you\n"
-            f"â¢ Code has expired\n"
-            f"â¢ Code has reached usage limit\n"
-            f"â¢ Invalid or disabled code\n\n"
-            f"ð¡ Check for typos and try again!")
+            f"• Code already used by you\n"
+            f"• Code has expired\n"
+            f"• Code has reached usage limit\n"
+            f"• Invalid or disabled code\n\n"
+            f"💡 Check for typos and try again!")
         await ctx.send(embed=embed)
 
 @bot.command(name='shop', aliases=['store', 'buy'])
@@ -8548,7 +8491,7 @@ async def shop_command(ctx, item_id: int = None):
         
         items, coins_data = await run_in_executor(get_shop_data)
         
-        embed = create_embed("ð Coin Shop", "Purchase items with your coins!", 0xe74c3c)
+        embed = create_embed("🛒 Coin Shop", "Purchase items with your coins!", 0xe74c3c)
         
         # Group by type
         types = {}
@@ -8568,11 +8511,11 @@ async def shop_command(ctx, item_id: int = None):
                     f"   Price: **{item['price']:,} coins**"
                 )
             
-            add_field(embed, f"ð¦ {item_type.replace('_', ' ').title()}", 
+            add_field(embed, f"📦 {item_type.replace('_', ' ').title()}", 
                      "\n\n".join(items_text), False)
         
-        add_field(embed, "ð° Your Balance", f"{coins_data['balance']:,} coins", False)
-        add_field(embed, "ð¡ How to Buy", f"Use `{PREFIX}shop <item_id>` to purchase", False)
+        add_field(embed, "💰 Your Balance", f"{coins_data['balance']:,} coins", False)
+        add_field(embed, "💡 How to Buy", f"Use `{PREFIX}shop <item_id>` to purchase", False)
         
         await ctx.send(embed=embed)
     else:
@@ -8609,7 +8552,7 @@ async def shop_command(ctx, item_id: int = None):
         else:
             effect_msg = "Item purchased! Check your inventory."
         
-        embed = create_success_embed("â Purchase Successful!", 
+        embed = create_success_embed("✅ Purchase Successful!", 
             f"You bought: **{item['name']}**\n\n"
             f"{effect_msg}\n\n"
             f"**New Balance:** {coins_data['balance']:,} coins")
@@ -8623,7 +8566,7 @@ async def work_command(ctx):
     
     # SECURITY: Check if user is restricted
     if is_user_restricted(user_id):
-        await ctx.send(embed=create_error_embed("â Access Restricted",
+        await ctx.send(embed=create_error_embed("❌ Access Restricted",
             "Your account has been restricted from earning coins due to suspicious activity.\n"
             "Contact an administrator for more information."))
         return
@@ -8634,7 +8577,7 @@ async def work_command(ctx):
         log_security_event(user_id, 'work_spam',
                          'Excessive work command attempts',
                          'medium')
-        await ctx.send(embed=create_error_embed("â° Slow Down",
+        await ctx.send(embed=create_error_embed("⏰ Slow Down",
             f"You're trying to work too frequently. Please wait {remaining}s before trying again."))
         return
     
@@ -8664,16 +8607,16 @@ async def work_command(ctx):
     success, coins_data, message, job_data = await run_in_executor(do_work)
     
     if not success:
-        embed = create_warning_embed("â° Work Cooldown", message)
+        embed = create_warning_embed("⏰ Work Cooldown", message)
         await ctx.send(embed=embed)
         return
     
-    embed = create_success_embed("âï¸ Work Complete!", message)
+    embed = create_success_embed("⚒️ Work Complete!", message)
     if job_data:
-        add_field(embed, "ð¼ Job", f"{job_data['current_job']} (Level {job_data['job_level']})", True)
-        add_field(embed, "ð Experience", f"{job_data['job_experience']}/{job_data['job_level'] * 100}", True)
-    add_field(embed, "ð° New Balance", f"{coins_data['balance']:,} coins", True)
-    add_field(embed, "â° Next Work", "Available in 4 hours", False)
+        add_field(embed, "💼 Job", f"{job_data['current_job']} (Level {job_data['job_level']})", True)
+        add_field(embed, "📊 Experience", f"{job_data['job_experience']}/{job_data['job_level'] * 100}", True)
+    add_field(embed, "💰 New Balance", f"{coins_data['balance']:,} coins", True)
+    add_field(embed, "⏰ Next Work", "Available in 4 hours", False)
     
     await ctx.send(embed=embed)
 
@@ -8701,21 +8644,21 @@ async def gift_command(ctx, user: discord.Member, amount: int, *, message: str =
         await ctx.send(embed=create_error_embed("Gift Failed", result_message))
         return
     
-    embed = create_success_embed("ð Coins Gifted!", 
+    embed = create_success_embed("🎁 Coins Gifted!", 
         f"You sent **{amount:,} coins** to {user.mention}!\n"
         f"Your new balance: **{sender_coins['balance']:,} coins**")
     
     if message:
-        add_field(embed, "ð Message", message, False)
+        add_field(embed, "💌 Message", message, False)
     
     await ctx.send(embed=embed)
     
     # Notify receiver
     try:
-        receiver_embed = create_success_embed("ð You Received Coins!", 
+        receiver_embed = create_success_embed("🎁 You Received Coins!", 
             f"{ctx.author.mention} sent you **{amount:,} coins**!")
         if message:
-            add_field(receiver_embed, "ð Message", message, False)
+            add_field(receiver_embed, "💌 Message", message, False)
         await user.send(embed=receiver_embed)
     except:
         pass
@@ -8738,7 +8681,7 @@ async def streak_command(ctx, user: discord.Member = None):
     streak_data = await run_in_executor(get_streak_data)
     
     if not streak_data:
-        embed = create_info_embed("ð¥ Daily Streak", 
+        embed = create_info_embed("🔥 Daily Streak", 
             f"{target_user.mention} hasn't started a streak yet!\n"
             f"Use `{PREFIX}daily` to start your streak!")
         await ctx.send(embed=embed)
@@ -8746,11 +8689,11 @@ async def streak_command(ctx, user: discord.Member = None):
     
     streak_data = dict(row)
     
-    embed = create_embed("ð¥ Daily Streak", f"Streak info for {target_user.mention}", 0xff6b6b)
+    embed = create_embed("🔥 Daily Streak", f"Streak info for {target_user.mention}", 0xff6b6b)
     
-    add_field(embed, "ð¥ Current Streak", f"**{streak_data['current_streak']} days**", True)
-    add_field(embed, "â­ Longest Streak", f"**{streak_data['longest_streak']} days**", True)
-    add_field(embed, "ð° Bonus Multiplier", f"**{streak_data['streak_bonus_multiplier']:.1f}x**", True)
+    add_field(embed, "🔥 Current Streak", f"**{streak_data['current_streak']} days**", True)
+    add_field(embed, "⭐ Longest Streak", f"**{streak_data['longest_streak']} days**", True)
+    add_field(embed, "💰 Bonus Multiplier", f"**{streak_data['streak_bonus_multiplier']:.1f}x**", True)
     
     # Calculate next milestone
     milestones = [7, 14, 30, 60, 100, 365]
@@ -8758,10 +8701,10 @@ async def streak_command(ctx, user: discord.Member = None):
     
     if next_milestone:
         days_to_milestone = next_milestone - streak_data['current_streak']
-        add_field(embed, "ð¯ Next Milestone", 
+        add_field(embed, "🎯 Next Milestone", 
             f"{next_milestone} days (in {days_to_milestone} days)", False)
     
-    add_field(embed, "ð¡ Tip", 
+    add_field(embed, "💡 Tip", 
         f"Claim `{PREFIX}daily` every day to maintain your streak!\n"
         f"Higher streaks = bigger bonuses!", False)
     
@@ -8776,7 +8719,7 @@ async def booster_command(ctx):
     booster = await run_in_executor(get_active_booster, user_id)
     
     if not booster:
-        embed = create_info_embed("â¡ No Active Booster", 
+        embed = create_info_embed("⚡ No Active Booster", 
             f"You don't have any active boosters.\n\n"
             f"Purchase boosters from the shop:\n"
             f"`{PREFIX}shop`")
@@ -8788,13 +8731,13 @@ async def booster_command(ctx):
     hours = int(time_left.total_seconds() // 3600)
     minutes = int((time_left.total_seconds() % 3600) // 60)
     
-    embed = create_embed("â¡ Active Booster", "Your coin earnings are boosted!", 0x00ff88)
+    embed = create_embed("⚡ Active Booster", "Your coin earnings are boosted!", 0x00ff88)
     
-    add_field(embed, "ð Multiplier", f"**{booster['multiplier']}x** coins", True)
-    add_field(embed, "â° Time Left", f"**{hours}h {minutes}m**", True)
-    add_field(embed, "ð Expires", expires_at.strftime('%Y-%m-%d %H:%M'), True)
+    add_field(embed, "🚀 Multiplier", f"**{booster['multiplier']}x** coins", True)
+    add_field(embed, "⏰ Time Left", f"**{hours}h {minutes}m**", True)
+    add_field(embed, "📅 Expires", expires_at.strftime('%Y-%m-%d %H:%M'), True)
     
-    add_field(embed, "ð¡ Tip", 
+    add_field(embed, "💡 Tip", 
         "All coin earnings are multiplied while booster is active!\n"
         "Stack activities for maximum gains!", False)
     
@@ -8841,35 +8784,35 @@ async def profile_command(ctx, user: discord.Member = None):
     # Get VPS count
     vps_count = len(vps_data.get(user_id, []))
     
-    embed = create_embed("ð¤ User Profile", f"Profile for {target_user.mention}", 0x3498db)
+    embed = create_embed("👤 User Profile", f"Profile for {target_user.mention}", 0x3498db)
     
     # Row 1
-    add_field(embed, "ð° Balance", f"{coins_data['balance']:,} coins", True)
-    add_field(embed, "ð Rank", f"#{rank}", True)
-    add_field(embed, "ð¥ Streak", f"{current_streak} days", True)
+    add_field(embed, "💰 Balance", f"{coins_data['balance']:,} coins", True)
+    add_field(embed, "🏆 Rank", f"#{rank}", True)
+    add_field(embed, "🔥 Streak", f"{current_streak} days", True)
     
     # Row 2
-    add_field(embed, "ð Total Earned", f"{coins_data['total_earned']:,} coins", True)
-    add_field(embed, "ð Total Spent", f"{coins_data['total_spent']:,} coins", True)
-    add_field(embed, "ð Achievements", f"{len(achievements)}", True)
+    add_field(embed, "📈 Total Earned", f"{coins_data['total_earned']:,} coins", True)
+    add_field(embed, "📉 Total Spent", f"{coins_data['total_spent']:,} coins", True)
+    add_field(embed, "🏅 Achievements", f"{len(achievements)}", True)
     
     # Activity
-    add_field(embed, "ð Activity Stats",
-        f"ð¥ Invites: {coins_data['invite_count']}\n"
-        f"ð¬ Messages: {coins_data['message_count']}\n"
-        f"ð¤ Voice: {coins_data['voice_minutes']} min\n"
-        f"ð¥ï¸ VPS: {vps_count}", True)
+    add_field(embed, "📊 Activity Stats",
+        f"👥 Invites: {coins_data['invite_count']}\n"
+        f"💬 Messages: {coins_data['message_count']}\n"
+        f"🎤 Voice: {coins_data['voice_minutes']} min\n"
+        f"🖥️ VPS: {vps_count}", True)
     
     # Job
     if job_data:
-        add_field(embed, "ð¼ Job",
+        add_field(embed, "💼 Job",
             f"{job_data['current_job']}\n"
             f"Level {job_data['job_level']}\n"
             f"Worked {job_data['total_work_count']} times", True)
     
     # Booster
     if booster:
-        add_field(embed, "â¡ Active Booster",
+        add_field(embed, "⚡ Active Booster",
             f"{booster['multiplier']}x earnings", True)
     
     await ctx.send(embed=embed)
@@ -8880,41 +8823,41 @@ async def quick_help(ctx):
     user_id = str(ctx.author.id)
     is_admin_user = user_id == str(MAIN_ADMIN_ID) or user_id in admin_data.get("admins", [])
     
-    embed = create_info_embed("ð Quick Help Reference", 
+    embed = create_info_embed("🚀 Quick Help Reference", 
         "Quick reference for common tasks. Use `!help` for complete command list.")
     
     # Common user tasks
-    add_field(embed, "ð¤ For Users", 
-        "â¢ `!myvps` - List your VPS\n"
-        "â¢ `!manage` - Start/stop/manage VPS\n"
-        "â¢ `!ports` - Manage port forwarding\n"
-        "â¢ `!share-user @user 1` - Share VPS #1\n"
-        "â¢ `!about` - Bot information", False)
+    add_field(embed, "👤 For Users", 
+        "• `!myvps` - List your VPS\n"
+        "• `!manage` - Start/stop/manage VPS\n"
+        "• `!ports` - Manage port forwarding\n"
+        "• `!share-user @user 1` - Share VPS #1\n"
+        "• `!about` - Bot information", False)
     
     # VPS management
-    add_field(embed, "ð¥ï¸ VPS Control", 
-        "â¢ In `!manage`: Click â¶ to start VPS\n"
-        "â¢ In `!manage`: Click â¸ to stop VPS\n"
-        "â¢ In `!manage`: Click ð for SSH access\n"
-        "â¢ In `!manage`: Click ð for live stats\n"
-        "â¢ In `!manage`: Click ð to reinstall OS", False)
+    add_field(embed, "🖥️ VPS Control", 
+        "• In `!manage`: Click ▶ to start VPS\n"
+        "• In `!manage`: Click ⏸ to stop VPS\n"
+        "• In `!manage`: Click 🔑 for SSH access\n"
+        "• In `!manage`: Click 📊 for live stats\n"
+        "• In `!manage`: Click 🔄 to reinstall OS", False)
     
     # Troubleshooting
-    add_field(embed, "ð§ Common Issues", 
-        "â¢ Ports not working? Use `!repair-ports <container>` (admin)\n"
-        "â¢ VPS suspended? Contact admin to unsuspend\n"
-        "â¢ Need more resources? Contact admin for upgrade\n"
-        "â¢ SSH not working? Try reinstall with different OS", False)
+    add_field(embed, "🔧 Common Issues", 
+        "• Ports not working? Use `!repair-ports <container>` (admin)\n"
+        "• VPS suspended? Contact admin to unsuspend\n"
+        "• Need more resources? Contact admin for upgrade\n"
+        "• SSH not working? Try reinstall with different OS", False)
     
     if is_admin_user:
-        add_field(embed, "ð¡ï¸ Admin Quick Actions", 
-            "â¢ `!create 2 2 20 @user` - Create 2GB/2CPU/20GB VPS\n"
-            "â¢ `!userinfo @user` - Check user details\n"
-            "â¢ `!node list` - List all nodes\n"
-            "â¢ `!serverstats` - System overview\n"
-            "â¢ `!suspend-vps <container> <reason>` - Suspend VPS", False)
+        add_field(embed, "🛡️ Admin Quick Actions", 
+            "• `!create 2 2 20 @user` - Create 2GB/2CPU/20GB VPS\n"
+            "• `!userinfo @user` - Check user details\n"
+            "• `!node list` - List all nodes\n"
+            "• `!serverstats` - System overview\n"
+            "• `!suspend-vps <container> <reason>` - Suspend VPS", False)
     
-    embed.set_footer(text=f"{BOT_NAME} VPS Manager â¢ Use !help for complete command list")
+    embed.set_footer(text=f"{BOT_NAME} VPS Manager • Use !help for complete command list")
     await ctx.send(embed=embed)
 
 @bot.command(name='help-search')
@@ -8953,13 +8896,13 @@ async def help_search(ctx, *, search_term: str = None):
             matches.append((cmd, desc))
     
     if not matches:
-        embed = create_info_embed("ð No Results Found",
+        embed = create_info_embed("🔍 No Results Found",
             f"No commands found matching '{search_term}'. Try a different search term.")
         await ctx.send(embed=embed)
         return
     
     # Show results
-    embed = create_info_embed(f"ð Search Results for '{search_term}'",
+    embed = create_info_embed(f"🔍 Search Results for '{search_term}'",
         f"Found {len(matches)} command(s) matching your search.")
     
     # Group matches by category
@@ -8969,7 +8912,7 @@ async def help_search(ctx, *, search_term: str = None):
     if len(matches) > 15:
         add_field(embed, "Note", f"Showing 15 of {len(matches)} matches. Try a more specific search.", False)
     
-    embed.set_footer(text=f"{BOT_NAME} VPS Manager â¢ Use !help for complete list")
+    embed.set_footer(text=f"{BOT_NAME} VPS Manager • Use !help for complete list")
     await ctx.send(embed=embed)    
 
 @bot.command(name='node')
@@ -9126,7 +9069,7 @@ async def node_cmd(ctx, sub: str, *args):
             warning_msg += f"**WARNING: Force mode will delete all {vps_count} VPS on this node first!**\n\n"
         warning_msg += "This action cannot be undone!"
         
-        embed = create_warning_embed("â ï¸ Delete Node", warning_msg)
+        embed = create_warning_embed("⚠️ Delete Node", warning_msg)
         
         class ConfirmDelete(discord.ui.View):
             def __init__(self, node_id, node_name, force, vps_count):
@@ -9205,7 +9148,7 @@ async def node_cmd(ctx, sub: str, *args):
         embed = create_info_embed(f"Node Status - {node['name']}")
         
         if node['is_local']:
-            status = "ð¢ Local Node"
+            status = "🟢 Local Node"
             cpu_usage = get_host_cpu_usage()
             ram_usage = get_host_ram_usage()
             add_field(embed, "Status", status, True)
@@ -9215,7 +9158,7 @@ async def node_cmd(ctx, sub: str, *args):
             try:
                 response = requests.get(f"{node['url']}/api/ping", params={'api_key': node['api_key']}, timeout=5)
                 if response.status_code == 200:
-                    status = "ð¢ Online"
+                    status = "🟢 Online"
                     try:
                         stats_response = requests.get(f"{node['url']}/api/get_host_stats", 
                                                     params={'api_key': node['api_key']}, 
@@ -9230,9 +9173,9 @@ async def node_cmd(ctx, sub: str, *args):
                         cpu_usage = "Unknown"
                         ram_usage = "Unknown"
                 else:
-                    status = "ð´ Offline"
+                    status = "🔴 Offline"
             except:
-                status = "ð´ Offline"
+                status = "🔴 Offline"
             
             add_field(embed, "Status", status, True)
         
@@ -9262,7 +9205,7 @@ class HelpView(discord.ui.View):
         # Command categories
         self.command_categories = {
             "user": {
-                "name": "ð¤ User Commands",
+                "name": "👤 User Commands",
                 "commands": [
                     (f"{PREFIX}ping", "Check bot latency"),
                     (f"{PREFIX}uptime", "Show host uptime"),
@@ -9274,7 +9217,7 @@ class HelpView(discord.ui.View):
                 ]
             },
             "coins": {
-                "name": "ð° Coins & Economy",
+                "name": "💰 Coins & Economy",
                 "commands": [
                     (f"{PREFIX}balance [@user]", "Check coin balance"),
                     (f"{PREFIX}daily", "Claim daily reward with streak bonus"),
@@ -9297,7 +9240,7 @@ class HelpView(discord.ui.View):
                 ]
             },
             "plans": {
-                "name": "ð Plans & Deployment",
+                "name": "🚀 Plans & Deployment",
                 "commands": [
                     (f"{PREFIX}deploy-plans", "View all available VPS deployment plans"),
                     (f"{PREFIX}resource-plans", "View all available resource upgrade plans"),
@@ -9317,7 +9260,7 @@ class HelpView(discord.ui.View):
                 ]
             },
             "coupons": {
-                "name": "ðï¸ Coupon System",
+                "name": "🎟️ Coupon System",
                 "commands": [
                     (f"{PREFIX}redeem <code>", "Redeem a coupon code for coins"),
                     (f"{PREFIX}create-coupon <coins> <code> [max_uses] [days]", "Create new coupon code (Admin only)"),
@@ -9329,7 +9272,7 @@ class HelpView(discord.ui.View):
                 ]
             },
             "vps": {
-                "name": "ð¥ï¸ VPS Management",
+                "name": "🖥️ VPS Management",
                 "commands": [
                     (f"{PREFIX}myvps", "List your VPS"),
                     (f"{PREFIX}vpsinfo [container]", "VPS information"),
@@ -9345,7 +9288,7 @@ class HelpView(discord.ui.View):
                 ]
             },
             "ports": {
-                "name": "ð Port Forwarding",
+                "name": "🔌 Port Forwarding",
                 "commands": [
                     (f"{PREFIX}ports [add <vps_num> <port> | list | remove <id>]", "Manage port forwards (TCP/UDP)"),
                     (f"{PREFIX}ports-add-user <amount> @user", "Allocate port slots to user (Admin only)"),
@@ -9354,7 +9297,7 @@ class HelpView(discord.ui.View):
                 ]
             },
             "system": {
-                "name": "âï¸ System Commands",
+                "name": "⚙️ System Commands",
                 "commands": [
                     (f"{PREFIX}serverstats", "Server statistics"),
                     (f"{PREFIX}resource-check", "Check and suspend high-usage VPS (Admin only)"),
@@ -9365,7 +9308,7 @@ class HelpView(discord.ui.View):
                 ]
             },
             "nodes": {
-                "name": "ð Node Management",
+                "name": "🌐 Node Management",
                 "commands": [
                     (f"{PREFIX}node create", "Create a new node (Admin only)"),
                     (f"{PREFIX}node list", "List all nodes (Admin only)"),
@@ -9378,7 +9321,7 @@ class HelpView(discord.ui.View):
                 "admin_only": True
             },
             "bot": {
-                "name": "ð¤ Bot Control",
+                "name": "🤖 Bot Control",
                 "commands": [
                     (f"{PREFIX}ping", "Check bot latency"),
                     (f"{PREFIX}uptime", "Show host uptime"),
@@ -9387,7 +9330,7 @@ class HelpView(discord.ui.View):
                 ]
             },
             "admin": {
-                "name": "ð¡ï¸ Admin Commands",
+                "name": "🛡️ Admin Commands",
                 "commands": [
                     (f"{PREFIX}lxc-list", "List all LXC containers"),
                     (f"{PREFIX}create <ram_gb> <cpu_cores> <disk_gb> @user", "Create VPS with OS selection"),
@@ -9409,7 +9352,7 @@ class HelpView(discord.ui.View):
                 "admin_only": True
             },
             "main_admin": {
-                "name": "ð Main Admin Commands",
+                "name": "👑 Main Admin Commands",
                 "commands": [
                     (f"{PREFIX}admin-add @user", "Add admin"),
                     (f"{PREFIX}admin-remove @user", "Remove admin"),
@@ -9495,19 +9438,19 @@ class HelpView(discord.ui.View):
     def get_category_emoji(self, category):
         """Get emoji for each category"""
         emojis = {
-            "user": "ð¤",
-            "coins": "ð°",
-            "plans": "ð",
-            "coupons": "ðï¸",
-            "vps": "ð¥ï¸",
-            "ports": "ð",
-            "system": "âï¸",
-            "bot": "ð¤",
-            "nodes": "ð",
-            "admin": "ð¡ï¸",
-            "main_admin": "ð"
+            "user": "👤",
+            "coins": "💰",
+            "plans": "🚀",
+            "coupons": "🎟️",
+            "vps": "🖥️",
+            "ports": "🔌",
+            "system": "⚙️",
+            "bot": "🤖",
+            "nodes": "🌐",
+            "admin": "🛡️",
+            "main_admin": "👑"
         }
-        return emojis.get(category, "ð")
+        return emojis.get(category, "📁")
    
     def update_embed(self):
         """Update the embed based on current category and user permissions"""
@@ -9528,7 +9471,7 @@ class HelpView(discord.ui.View):
         }
         color = colors.get(self.current_category, 0x1a1a1a)
        
-        title = f"ð {BOT_NAME} Command Help - {category_data['name']}"
+        title = f"📚 {BOT_NAME} Command Help - {category_data['name']}"
         description = f"**{category_data['name']}**\nUse the dropdown below to switch categories."
        
         # Add helpful tips based on category
@@ -9546,7 +9489,7 @@ class HelpView(discord.ui.View):
         }
        
         if self.current_category in tips:
-            description += f"\n\nð¡ {tips[self.current_category]}"
+            description += f"\n\n💡 {tips[self.current_category]}"
        
         self.embed = create_embed(title, description, color)
        
@@ -9556,17 +9499,17 @@ class HelpView(discord.ui.View):
        
         # Add appropriate footer based on category
         footers = {
-            "user": f"{BOT_NAME} VPS Manager â¢ User Commands â¢ Need help? Contact admin",
-            "coins": f"{BOT_NAME} VPS Manager â¢ Coins & Economy â¢ Earn, Spend, Compete!",
-            "plans": f"{BOT_NAME} VPS Manager â¢ Plans & Deployment â¢ Flexible VPS Options",
-            "coupons": f"{BOT_NAME} VPS Manager â¢ Coupon System â¢ Redeem Codes for Coins",
-            "vps": f"{BOT_NAME} VPS Manager â¢ VPS Management â¢ Snapshots â¢ Cloning",
-            "ports": f"{BOT_NAME} VPS Manager â¢ Port Forwarding â¢ TCP/UDP Support",
-            "system": f"{BOT_NAME} VPS Manager â¢ System Monitoring â¢ Resource Management",
-            "nodes": f"{BOT_NAME} VPS Manager â¢ Multi-Node Management â¢ Distributed Infrastructure",
-            "bot": f"{BOT_NAME} VPS Manager â¢ Bot Control â¢ Status Management",
-            "admin": f"{BOT_NAME} VPS Manager â¢ Admin Panel â¢ Restricted Access",
-            "main_admin": f"{BOT_NAME} VPS Manager â¢ Main Admin â¢ Full System Control"
+            "user": f"{BOT_NAME} VPS Manager • User Commands • Need help? Contact admin",
+            "coins": f"{BOT_NAME} VPS Manager • Coins & Economy • Earn, Spend, Compete!",
+            "plans": f"{BOT_NAME} VPS Manager • Plans & Deployment • Flexible VPS Options",
+            "coupons": f"{BOT_NAME} VPS Manager • Coupon System • Redeem Codes for Coins",
+            "vps": f"{BOT_NAME} VPS Manager • VPS Management • Snapshots • Cloning",
+            "ports": f"{BOT_NAME} VPS Manager • Port Forwarding • TCP/UDP Support",
+            "system": f"{BOT_NAME} VPS Manager • System Monitoring • Resource Management",
+            "nodes": f"{BOT_NAME} VPS Manager • Multi-Node Management • Distributed Infrastructure",
+            "bot": f"{BOT_NAME} VPS Manager • Bot Control • Status Management",
+            "admin": f"{BOT_NAME} VPS Manager • Admin Panel • Restricted Access",
+            "main_admin": f"{BOT_NAME} VPS Manager • Main Admin • Full System Control"
         }
        
         self.embed.set_footer(text=footers.get(self.current_category, f"{BOT_NAME} VPS Manager"))
